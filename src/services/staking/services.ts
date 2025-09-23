@@ -234,6 +234,87 @@ import {
       throw error;
     }
   }
+
+    // === Unstake Tokens ===
+export async function unstakeTokens(amount: number) {
+  const { program, adminKeypair } = getProgram();
+  const userKeypair = adminKeypair; // Using admin as user for testing
+
+  console.log(`Unstaking ${amount} tokens for user: ${userKeypair.publicKey.toString()}`);
+
+  // Get all required PDAs
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [programAuthority] = getProgramAuthorityPda(program.programId);
+  const [userStakingAccount] = getUserStakePda(program.programId, userKeypair.publicKey);
+  const [escrowTokenAccount] = getEscrowTokenAccountPda(program.programId, stakingPool);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  // Get user's token account (associated token account)
+  const stakerTokenAccount = getAssociatedTokenAddressSync(
+    tokenMintAddress,
+    userKeypair.publicKey,
+    false,
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  console.log(`User Token Account: ${stakerTokenAccount.toString()}`);
+  console.log(`User Staking Account PDA: ${userStakingAccount.toString()}`);
+  console.log(`Escrow Token Account: ${escrowTokenAccount.toString()}`);
+
+  // Check if user has enough staked tokens
+  try {
+    const userStakingInfo = await program.account.userStakingAccount.fetch(userStakingAccount) as UserStakingAccount;
+    const stakedAmount = userStakingInfo.stakedAmount.toNumber();
+    
+    if (stakedAmount < amount) {
+      throw new Error(`Insufficient staked balance. User has ${stakedAmount} staked, trying to unstake ${amount}`);
+    }
+    
+    console.log(`User has ${stakedAmount} tokens staked, unstaking ${amount}`);
+  } catch (error: any) {
+    if (error.message.includes("Account does not exist")) {
+      throw new Error("User has not staked any tokens yet");
+    }
+    throw error;
+  }
+
+  try {
+    const tx = await program.methods
+      .unstake(new anchor.BN(amount))
+      .accounts({
+        staker: userKeypair.publicKey,
+        stakingPool: stakingPool,
+        userStakingAccount: userStakingAccount,
+        programAuthority: programAuthority,
+        escrowTokenAccount: escrowTokenAccount,
+        stakerTokenAccount: stakerTokenAccount,
+        tokenMint: tokenMintAddress,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+      })
+      .signers([userKeypair])
+      .rpc();
+
+    console.log(`Successfully unstaked ${amount} tokens!`);
+    console.log(`Transaction: ${tx}`);
+
+    return {
+      success: true,
+      transactionId: tx,
+      amount: amount,
+      userPublicKey: userKeypair.publicKey,
+      userStakingAccount: userStakingAccount,
+    };
+  } catch (error) {
+    console.error("Error unstaking tokens:", error);
+    throw error;
+  }
+}
+
   
   // === Get Staking Pool Info ===
   export async function getStakingPoolInfo() {
