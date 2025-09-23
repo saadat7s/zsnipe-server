@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
+import stakingRoute from './routes/stakingRoute';
 
 // Load environment variables
 dotenv.config();
@@ -23,6 +24,9 @@ app.use(morgan('combined'));
 // Body parsing
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// API routes
+app.use('/api/staking', stakingRoute);
 
 // Basic routes
 app.get('/', (req, res) => {
