@@ -1,8 +1,25 @@
 import { Router } from 'express';
-import { initStakingPool, stake, getPoolInfo, getUserInfo, getUserBalance, unstake } from '../controllers/stakingController';
+import { 
+  initStakingPool, 
+  stake, 
+  getPoolInfo, 
+  getUserInfo, 
+  getUserBalance, 
+  unstake, 
+  initGovernanceAccount, 
+  computeVotingPower, 
+  previewVotingPower, 
+  eligibility, 
+  governanceInfo, 
+  governanceSummary,
+  getAllWallets,
+  bulkStake,
+  bulkInitGovernance
+} from '../controllers/stakingController';
 
 const router = Router();
 
+// Core staking routes
 router.post('/init-staking-pool', initStakingPool);
 router.post('/stake-tokens', stake);
 router.get('/staking-pool-info', getPoolInfo);
@@ -10,6 +27,17 @@ router.get('/user-staking-info', getUserInfo);
 router.get('/user-token-balance', getUserBalance);
 router.post('/unstake-tokens', unstake);
 
+// Governance routes
+router.post('/governance/init', initGovernanceAccount);
+router.post('/governance/compute-voting-power', computeVotingPower);
+router.get('/governance/preview-voting-power', previewVotingPower);
+router.get('/governance/eligibility', eligibility);
+router.get('/governance/info', governanceInfo);
+router.get('/governance/summary', governanceSummary);
+
+// Mock wallet simulation routes
+router.get('/wallets/all', getAllWallets);
+router.post('/wallets/bulk-stake', bulkStake);
+router.post('/wallets/bulk-init-governance', bulkInitGovernance);
+
 export default router;
-
-

@@ -14,13 +14,13 @@ pub mod zero_sided_snipe {
         let staking_pool = &mut ctx.accounts.staking_pool;
         let clock = Clock::get()?;
 
-        // Validate Token 2022 mint (basic only, no extensions)
+        // Validate Token 2022 mint
         require!(
             ctx.accounts.token_mint.to_account_info().owner == &spl_token_2022::ID,
             ErrorCode::InvalidTokenProgram
         );
 
-        // Set the authority as program PDA for rug-proof design
+        // Set the authority as program PDA
         let (program_authority, authority_bump) =
             Pubkey::find_program_address(&[b"program_authority"], ctx.program_id);
 
@@ -29,26 +29,12 @@ pub mod zero_sided_snipe {
         staking_pool.initializer = ctx.accounts.admin.key();
         staking_pool.total_staked_amount = 0;
         staking_pool.mint_address = ctx.accounts.token_mint.key();
-        staking_pool.escrow_account = ctx.accounts.escrow_token_account.key(); // Fixed field name
+        staking_pool.escrow_account = ctx.accounts.escrow_token_account.key();
         staking_pool.bump = ctx.bumps.staking_pool;
         staking_pool.created_at = clock.unix_timestamp;
         staking_pool.is_active = true;
         staking_pool.token_price_usd_micro = 1000;
         staking_pool.price_last_updated = clock.unix_timestamp;
-
-        msg!(
-            "Staking Pool initialized with Token 2022 mint called ZSNIPE: {}",
-            ctx.accounts.token_mint.key()
-        );
-        msg!("Pool Authority set to program PDA: {}", program_authority);
-        msg!(
-            "Escrow account created: {}",
-            ctx.accounts.escrow_token_account.key()
-        );
-        msg!(
-            "Initial token price set to: {} micro-USD",
-            staking_pool.token_price_usd_micro
-        );
 
         Ok(())
     }
@@ -95,93 +81,186 @@ pub mod zero_sided_snipe {
             .checked_add(amount)
             .ok_or(ErrorCode::InvalidAmount)?;
 
-        msg!(
-            "Staked {} tokens for user {}",
-            amount,
-            ctx.accounts.staker.key()
+        Ok(())
+    }
+
+    pub fn unstake(ctx: Context<Unstake>, amount: u64) -> Result<()> {
+        require!(amount > 0, ErrorCode::InvalidAmount);
+
+        let user_staking_account = &mut ctx.accounts.user_staking_account;
+        let staking_pool = &mut ctx.accounts.staking_pool;
+
+        require!(
+            user_staking_account.staked_amount >= amount,
+            ErrorCode::InsufficientStakedBalance
         );
+
+        // Check if tokens are locked due to governance participation
+        if let Some(governance_account) = &ctx.accounts.governance_account {
+            let clock = Clock::get()?;
+            require!(
+                clock.unix_timestamp >= governance_account.stake_lock_end,
+                ErrorCode::TokensLockedForGovernance
+            );
+        }
+
+        let authority_bump = &[staking_pool.authority_bump];
+        let authority_seeds = &[b"program_authority".as_ref(), authority_bump.as_ref()];
+        let signer_seeds = &[&authority_seeds[..]];
+
+        transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.escrow_token_account.to_account_info(),
+                    mint: ctx.accounts.token_mint.to_account_info(),
+                    to: ctx.accounts.staker_token_account.to_account_info(),
+                    authority: ctx.accounts.program_authority.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            amount,
+            ctx.accounts.token_mint.decimals,
+        )?;
+
+        user_staking_account.staked_amount = user_staking_account
+            .staked_amount
+            .checked_sub(amount)
+            .ok_or(ErrorCode::InsufficientStakedBalance)?;
+        user_staking_account.last_updated = Clock::get()?.unix_timestamp;
+
+        staking_pool.total_staked_amount = staking_pool
+            .total_staked_amount
+            .checked_sub(amount)
+            .ok_or(ErrorCode::InsufficientStakedBalance)?;
 
         Ok(())
     }
 
-    // pub fn unstake(ctx: Context<Unstake>, amount: u64) -> Result<()> {
-    //     require!(amount > 0, ErrorCode::InvalidAmount);
+    // NEW: Initialize governance account separately
+    pub fn initialize_governance_account(ctx: Context<InitializeGovernanceAccount>) -> Result<()> {
+        let governance_account = &mut ctx.accounts.governance_account;
+        let clock = Clock::get()?;
 
-    //     let user_staking_account = &mut ctx.accounts.user_staking_account;
-    //     let staking_pool = &mut ctx.accounts.staking_pool;
-    //     let clock = Clock::get()?;
+        governance_account.staker = ctx.accounts.staker.key();
+        governance_account.participation_count = 0;
+        governance_account.last_vote_timestamp = 0;
+        governance_account.stake_lock_end = 0;
+        governance_account.voting_power_cache = 0;
+        governance_account.created_at = clock.unix_timestamp;
+        governance_account.bump = ctx.bumps.governance_account;
 
-    //     require!(
-    //         user_staking_account.staked_amount >= amount,
-    //         ErrorCode::InsufficientStakedBalance
-    //     );
+        Ok(())
+    }
 
-    //     // Create signer seeds for PDA - Fixed syntax
-    //     let authority_bump = &[staking_pool.authority_bump];
-    //     let authority_seeds = &[b"program_authority".as_ref(), authority_bump.as_ref()];
-    //     let signer_seeds = &[&authority_seeds[..]];
+    // NEW: Calculate voting power (separate from staking)
+    pub fn calculate_voting_power(ctx: Context<CalculateVotingPower>) -> Result<u64> {
+        let user_staking_account = &ctx.accounts.user_staking_account;
+        let governance_account = &mut ctx.accounts.governance_account;
+        let clock = Clock::get()?;
 
-    //     // Transfer tokens from escrow back to user
-    //     transfer_checked(
-    //         CpiContext::new_with_signer(
-    //             ctx.accounts.token_program.to_account_info(),
-    //             TransferChecked {
-    //                 from: ctx.accounts.escrow_token_account.to_account_info(),
-    //                 mint: ctx.accounts.token_mint.to_account_info(),
-    //                 to: ctx.accounts.staker_token_account.to_account_info(),
-    //                 authority: ctx.accounts.program_authority.to_account_info(),
-    //             },
-    //             signer_seeds,
-    //         ),
-    //         amount,
-    //         ctx.accounts.token_mint.decimals,
-    //     )?;
+        // Calculate stake duration in days
+        let stake_duration_seconds = clock.unix_timestamp - user_staking_account.timestamp;
+        let stake_duration_days = (stake_duration_seconds / 86400) as u32;
 
-    //     // Update balances
-    //     user_staking_account.staked_amount = user_staking_account
-    //         .staked_amount
-    //         .checked_sub(amount)
-    //         .ok_or(ErrorCode::InsufficientStakedBalance)?;
-    //     user_staking_account.last_updated = clock.unix_timestamp;
+        // Implement hybrid linear-quadratic calculation
+        let voting_power =
+            calculate_hybrid_voting_power(user_staking_account.staked_amount, stake_duration_days);
 
-    //     staking_pool.total_staked_amount = staking_pool
-    //         .total_staked_amount
-    //         .checked_sub(amount)
-    //         .ok_or(ErrorCode::InsufficientStakedBalance)?;
+        // Cache the result
+        governance_account.voting_power_cache = voting_power;
 
-    //     msg!(
-    //         "Unstaked {} tokens for user {}",
-    //         amount,
-    //         ctx.accounts.staker.key()
-    //     );
+        Ok(voting_power)
+    }
+}
 
-    //     Ok(())
-    // }
+// Hybrid voting power calculation function
+fn calculate_hybrid_voting_power(stake_amount: u64, stake_duration_days: u32) -> u64 {
+    // Base power calculation (linear up to 100K, then quadratic)
+    let base_power = if stake_amount <= 100_000 {
+        stake_amount
+    } else {
+        100_000 + ((stake_amount - 100_000) as f64).sqrt() as u64
+    };
 
-    #[derive(Accounts)]
-    pub struct InitializeStakingPool<'info> {
-        #[account(mut)]
-        pub admin: Signer<'info>,
+    // Time multiplier based on stake duration
+    let time_multiplier = match stake_duration_days {
+        0..=30 => 100,   // 1.0x
+        31..=90 => 120,  // 1.2x
+        91..=365 => 150, // 1.5x
+        _ => 200,        // 2.0x maximum
+    };
 
-        #[account(
+    (base_power * time_multiplier) / 100
+}
+
+// === ACCOUNT STRUCTURES ===
+
+// Clean staking pool - no governance bloat
+#[account]
+pub struct StakingPool {
+    pub authority: Pubkey,          // 32 bytes
+    pub authority_bump: u8,         // 1 byte
+    pub initializer: Pubkey,        // 32 bytes
+    pub total_staked_amount: u64,   // 8 bytes
+    pub mint_address: Pubkey,       // 32 bytes
+    pub escrow_account: Pubkey,     // 32 bytes
+    pub bump: u8,                   // 1 byte
+    pub created_at: i64,            // 8 bytes
+    pub is_active: bool,            // 1 byte
+    pub token_price_usd_micro: u64, // 8 bytes
+    pub price_last_updated: i64,    // 8 bytes
+}
+// Total: 161 bytes (much smaller!)
+
+// Clean user staking - just the essentials
+#[account]
+pub struct UserStakingAccount {
+    pub staker: Pubkey,     // 32 bytes
+    pub staked_amount: u64, // 8 bytes
+    pub timestamp: i64,     // 8 bytes
+    pub last_updated: i64,  // 8 bytes
+    pub bump: u8,           // 1 byte
+}
+// Total: 57 bytes (much smaller!)
+
+// Separate governance account - only created when needed
+#[account]
+pub struct GovernanceAccount {
+    pub staker: Pubkey,           // 32 bytes
+    pub participation_count: u32, // 4 bytes
+    pub last_vote_timestamp: i64, // 8 bytes
+    pub stake_lock_end: i64,      // 8 bytes
+    pub voting_power_cache: u64,  // 8 bytes
+    pub created_at: i64,          // 8 bytes
+    pub bump: u8,                 // 1 byte
+}
+// Total: 69 bytes (only exists when user participates in governance)
+
+// === ACCOUNT CONTEXTS ===
+
+#[derive(Accounts)]
+pub struct InitializeStakingPool<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    #[account(
         init,
         payer = admin,
-        space = 8 + 32 + 1 + 32 + 8 + 32 + 32 + 1 + 8 + 1 + 8 + 8,
+        space = 8 + 161, // Much smaller space requirement
         seeds = [b"staking_poolV2"],
         bump
     )]
-        pub staking_pool: Account<'info, StakingPool>,
+    pub staking_pool: Account<'info, StakingPool>,
 
-        /// Program authority PDA that will own the escrow account
-        /// CHECK: This is safe because we derive it with seeds
-        #[account(
+    #[account(
         seeds = [b"program_authority"],
         bump
     )]
-        pub program_authority: UncheckedAccount<'info>,
+    /// CHECK: Program authority PDA
+    pub program_authority: UncheckedAccount<'info>,
 
-        // Escrow token account using PDA seeds
-        #[account(
+    #[account(
         init,
         payer = admin,
         token::mint = token_mint,  
@@ -189,193 +268,201 @@ pub mod zero_sided_snipe {
         seeds = [b"escrow", staking_pool.key().as_ref()],
         bump
     )]
-        pub escrow_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub escrow_token_account: InterfaceAccount<'info, TokenAccount>,
 
-        // Token 2022 mint - this is your ZSNIPE token
-        #[account(
+    #[account(
         constraint = token_mint.to_account_info().owner == &spl_token_2022::ID @ ErrorCode::InvalidTokenProgram
     )]
-        pub token_mint: InterfaceAccount<'info, Mint>,
+    pub token_mint: InterfaceAccount<'info, Mint>,
 
-        pub system_program: Program<'info, System>,
-        pub token_program: Interface<'info, TokenInterface>,
-        pub associated_token_program: Program<'info, AssociatedToken>,
-    }
+    pub system_program: Program<'info, System>,
+    pub token_program: Interface<'info, TokenInterface>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+}
 
-    #[derive(Accounts)]
-    pub struct Stake<'info> {
-        #[account(mut)]
-        pub staker: Signer<'info>,
+#[derive(Accounts)]
+pub struct Stake<'info> {
+    #[account(mut)]
+    pub staker: Signer<'info>,
 
-        #[account(
+    #[account(
         mut,
         seeds = [b"staking_poolV2"],
         bump = staking_pool.bump,
         constraint = staking_pool.is_active @ ErrorCode::PoolNotActive,
-        constraint = staking_pool.mint_address == token_mint.key() @ ErrorCode::InvalidTokenMint,
     )]
-        pub staking_pool: Account<'info, StakingPool>,
+    pub staking_pool: Account<'info, StakingPool>,
 
-        #[account(
+    #[account(
         init_if_needed,
         payer = staker,
-        space = 8 + 32 + 8 + 8 + 8 + 1,
+        space = 8 + 57, // Much smaller space
         seeds = [b"user_stake", staker.key().as_ref()],
         bump,
     )]
-        pub user_staking_account: Account<'info, UserStakingAccount>,
+    pub user_staking_account: Account<'info, UserStakingAccount>,
 
-        /// Program authority PDA that owns the escrow account
-        /// CHECK: This is safe because we derive it with seeds
-        #[account(
+    #[account(
         seeds = [b"program_authority"],
         bump = staking_pool.authority_bump
     )]
-        pub program_authority: UncheckedAccount<'info>,
+    /// CHECK: Program authority PDA
+    pub program_authority: UncheckedAccount<'info>,
 
-        // Pool's escrow token account (using PDA seeds)
-        #[account(
+    #[account(
         mut,
         seeds = [b"escrow", staking_pool.key().as_ref()],
         bump,
         constraint = escrow_token_account.key() == staking_pool.escrow_account @ ErrorCode::InvalidTokenMint,
-        constraint = escrow_token_account.owner == program_authority.key() @ ErrorCode::InvalidTokenMint,
     )]
-        pub escrow_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub escrow_token_account: InterfaceAccount<'info, TokenAccount>,
 
-        // User Token Account for ZSNIPE
-        #[account(
+    #[account(
         mut,
         associated_token::mint = token_mint,
         associated_token::authority = staker,
         associated_token::token_program = token_program
     )]
-        pub staker_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub staker_token_account: InterfaceAccount<'info, TokenAccount>,
 
-        // Token 2022 mint
-        #[account(
+    #[account(
         constraint = token_mint.to_account_info().owner == &spl_token_2022::ID @ ErrorCode::InvalidTokenProgram
     )]
-        pub token_mint: InterfaceAccount<'info, Mint>,
+    pub token_mint: InterfaceAccount<'info, Mint>,
 
-        pub system_program: Program<'info, System>,
-        pub token_program: Interface<'info, TokenInterface>,
-    }
+    pub system_program: Program<'info, System>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
 
-    // #[derive(Accounts)]
-    // pub struct Unstake<'info> {
-    //     #[account(mut)]
-    //     pub staker: Signer<'info>,
+#[derive(Accounts)]
+pub struct Unstake<'info> {
+    #[account(mut)]
+    pub staker: Signer<'info>,
 
-    //     #[account(
-    //     mut,
-    //     seeds = [b"staking_poolV2"],
-    //     bump = staking_pool.bump,
-    //     constraint = staking_pool.is_active @ ErrorCode::PoolNotActive,
-    // )]
-    //     pub staking_pool: Account<'info, StakingPool>,
+    #[account(
+        mut,
+        seeds = [b"staking_poolV2"],
+        bump = staking_pool.bump,
+        constraint = staking_pool.is_active @ ErrorCode::PoolNotActive,
+    )]
+    pub staking_pool: Account<'info, StakingPool>,
 
-    //     #[account(
-    //     mut,
-    //     seeds = [b"user_stake", staker.key().as_ref()],
-    //     bump = user_staking_account.bump,
-    //     constraint = user_staking_account.staker == staker.key() @ ErrorCode::UnauthorizedStaker,
-    // )]
-    //     pub user_staking_account: Account<'info, UserStakingAccount>,
+    #[account(
+        mut,
+        seeds = [b"user_stake", staker.key().as_ref()],
+        bump = user_staking_account.bump,
+        constraint = user_staking_account.staker == staker.key() @ ErrorCode::UnauthorizedStaker,
+    )]
+    pub user_staking_account: Account<'info, UserStakingAccount>,
 
-    //     /// Program authority PDA that owns the escrow account
-    //     /// CHECK: This is safe because we derive it with seeds
-    //     #[account(
-    //     seeds = [b"program_authority"],
-    //     bump = staking_pool.authority_bump
-    // )]
-    //     pub program_authority: UncheckedAccount<'info>,
+    // Optional governance account - only needed if user participates in governance
+    #[account(
+        seeds = [b"governance", staker.key().as_ref()],
+        bump = governance_account.bump,
+    )]
+    pub governance_account: Option<Account<'info, GovernanceAccount>>,
 
-    //     // Pool's escrow token account (using PDA seeds)
-    //     #[account(
-    //     mut,
-    //     seeds = [b"escrow", staking_pool.key().as_ref()],
-    //     bump,
-    //     constraint = escrow_token_account.key() == staking_pool.escrow_account @ ErrorCode::InvalidTokenMint,
-    //     constraint = escrow_token_account.owner == program_authority.key() @ ErrorCode::InvalidTokenMint,
-    // )]
-    //     pub escrow_token_account: InterfaceAccount<'info, TokenAccount>,
+    #[account(
+        seeds = [b"program_authority"],
+        bump = staking_pool.authority_bump
+    )]
+    /// CHECK: Program authority PDA
+    pub program_authority: UncheckedAccount<'info>,
 
-    //     // User Token Account for ZSNIPE
-    //     #[account(
-    //     mut,
-    //     associated_token::mint = token_mint,
-    //     associated_token::authority = staker,
-    //     associated_token::token_program = token_program
-    // )]
-    //     pub staker_token_account: InterfaceAccount<'info, TokenAccount>,
+    #[account(
+        mut,
+        seeds = [b"escrow", staking_pool.key().as_ref()],
+        bump,
+    )]
+    pub escrow_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    //     // Token 2022 mint
-    //     #[account(
-    //     constraint = token_mint.to_account_info().owner == &spl_token_2022::ID @ ErrorCode::InvalidTokenProgram
-    // )]
-    //     pub token_mint: InterfaceAccount<'info, Mint>,
+    #[account(
+        mut,
+        associated_token::mint = token_mint,
+        associated_token::authority = staker,
+        associated_token::token_program = token_program
+    )]
+    pub staker_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    //     pub token_program: Interface<'info, TokenInterface>,
-    // }
+    #[account(
+        constraint = token_mint.to_account_info().owner == &spl_token_2022::ID @ ErrorCode::InvalidTokenProgram
+    )]
+    pub token_mint: InterfaceAccount<'info, Mint>,
 
-    #[account]
-    pub struct StakingPool {
-        pub authority: Pubkey,          // Program PDA for true decentralization
-        pub authority_bump: u8,         // Authority PDA bump
-        pub initializer: Pubkey,        // Admin who initialized the account
-        pub total_staked_amount: u64,   // Total staked amount by all stakers
-        pub mint_address: Pubkey,       // ZSNIPE's mint address
-        pub escrow_account: Pubkey,     // Escrow token account where staked tokens are held
-        pub bump: u8,                   // PDA bump
-        pub created_at: i64,            // Pool creation timestamp
-        pub is_active: bool,            // Pool status
-        pub token_price_usd_micro: u64, // Token price in micro-USD (6 decimals)
-        pub price_last_updated: i64,    // When price was last updated
-    }
+    pub token_program: Interface<'info, TokenInterface>,
+}
 
-    #[account]
-    pub struct UserStakingAccount {
-        pub staker: Pubkey,
-        pub staked_amount: u64,
-        pub timestamp: i64,
-        pub last_updated: i64,
-        pub bump: u8,
-    }
+#[derive(Accounts)]
+pub struct InitializeGovernanceAccount<'info> {
+    #[account(mut)]
+    pub staker: Signer<'info>,
 
-    #[error_code]
-    pub enum ErrorCode {
-        #[msg("Stake amount below minimum requirement")]
-        InsufficientStakeAmount,
+    #[account(
+        init,
+        payer = staker,
+        space = 8 + 69,
+        seeds = [b"governance", staker.key().as_ref()],
+        bump
+    )]
+    pub governance_account: Account<'info, GovernanceAccount>,
 
-        #[msg("User does not own this staking account")]
-        UnauthorizedStaker,
+    pub system_program: Program<'info, System>,
+}
 
-        #[msg("Insufficient staked balance for unstaking")]
-        InsufficientStakedBalance,
+#[derive(Accounts)]
+pub struct CalculateVotingPower<'info> {
+    pub staker: Signer<'info>,
 
-        #[msg("Staking pool is not active")]
-        PoolNotActive,
+    #[account(
+        seeds = [b"user_stake", staker.key().as_ref()],
+        bump = user_staking_account.bump,
+        constraint = user_staking_account.staker == staker.key() @ ErrorCode::UnauthorizedStaker,
+    )]
+    pub user_staking_account: Account<'info, UserStakingAccount>,
 
-        #[msg("Invalid token mint address")]
-        InvalidTokenMint,
+    #[account(
+        mut,
+        seeds = [b"governance", staker.key().as_ref()],
+        bump = governance_account.bump,
+    )]
+    pub governance_account: Account<'info, GovernanceAccount>,
+}
 
-        #[msg("Must use Token 2022 program")]
-        InvalidTokenProgram,
+#[error_code]
+pub enum ErrorCode {
+    #[msg("Stake amount below minimum requirement")]
+    InsufficientStakeAmount,
 
-        #[msg("Invalid amount - must be greater than 0")]
-        InvalidAmount,
+    #[msg("User does not own this staking account")]
+    UnauthorizedStaker,
 
-        #[msg("Pool already initialized")]
-        PoolAlreadyInitialized,
+    #[msg("Insufficient staked balance for unstaking")]
+    InsufficientStakedBalance,
 
-        #[msg("Unauthorized - only admin can perform this action")]
-        Unauthorized,
+    #[msg("Staking pool is not active")]
+    PoolNotActive,
 
-        #[msg("Invalid price - must be between 100 and 10,000,000 micro-USD")]
-        InvalidPrice,
+    #[msg("Invalid token mint address")]
+    InvalidTokenMint,
 
-        #[msg("Price is stale - admin must update token price")]
-        StalePrice,
-    }
+    #[msg("Must use Token 2022 program")]
+    InvalidTokenProgram,
+
+    #[msg("Invalid amount - must be greater than 0")]
+    InvalidAmount,
+
+    #[msg("Pool already initialized")]
+    PoolAlreadyInitialized,
+
+    #[msg("Unauthorized - only admin can perform this action")]
+    Unauthorized,
+
+    #[msg("Invalid price - must be between 100 and 10,000,000 micro-USD")]
+    InvalidPrice,
+
+    #[msg("Price is stale - admin must update token price")]
+    StalePrice,
+
+    #[msg("Tokens are currently locked for governance participation")]
+    TokensLockedForGovernance,
 }
