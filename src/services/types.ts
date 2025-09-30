@@ -89,3 +89,54 @@ export interface AccountInfo {
   lamports?: number;
   dataLength?: number;
 }
+
+export enum VoteChoice {
+  Yes = 0,
+  No = 1,
+  Abstain = 2,
+}
+
+// Types for governance accounts
+export interface GovernanceAccount {
+  staker: PublicKey;
+  participationCount: number;
+  lastVoteTimestamp: BN;
+  stakeLockEnd: BN;
+  votingPowerCache: BN;
+  createdAt: BN;
+  bump: number;
+}
+
+export interface VoteRecord {
+  voter: PublicKey;            // 32 bytes
+  proposalId: BN;       // 8 bytes
+  voteChoice: VoteChoice;      // 1 byte  
+  votingPower: BN;      // 8 bytes
+  votedAt: BN;          // 8 bytes
+  bump: number;                // 1 byte
+}
+
+export interface ProposalInfo {
+  proposalId: number;                // u64
+  proposer: string;                  // Pubkey as base58 string
+  title: string;                     // up to 100 chars
+  description: string;               // up to 500 chars
+  proposalType: any;                 // ProposalType (enum, type depends on IDL)
+  status: any;                       // ProposalStatus (enum, type depends on IDL)
+  executionData: number[];           // Vec<u8>
+  votingPeriodDays: number;          // u8
+  createdAt: number;                 // i64 (unix timestamp)
+  votingEndsAt: number;              // i64 (unix timestamp)
+  finalizedAt: number;               // i64 (unix timestamp)
+  executedAt: number;                // i64 (unix timestamp)
+  timelockEnd: number;               // i64 (unix timestamp)
+  yesVotes: number;                  // u64
+  noVotes: number;                   // u64
+  abstainVotes: number;              // u64
+  totalVoters: number;               // u32
+  depositAmount: number;             // u64 (in smallest unit, e.g. 1_000_000 = 1 ZSNIPE)
+  depositRefunded: boolean;          // bool
+  bump: number;                      // u8
+  reserved: number[];                // [u8; 32]
+  proposalAccount: string;           // PDA address as base58 string
+}

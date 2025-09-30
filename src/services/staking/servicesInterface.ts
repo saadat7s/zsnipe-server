@@ -1,0 +1,852 @@
+import {
+  Connection,
+  Keypair,
+  PublicKey,
+  LAMPORTS_PER_SOL,
+  SystemProgram,
+  Transaction
+} from "@solana/web3.js";
+
+import * as anchor from "@coral-xyz/anchor";
+import { 
+  ASSOCIATED_TOKEN_PROGRAM_ID, 
+  TOKEN_2022_PROGRAM_ID, 
+  getAssociatedTokenAddressSync 
+} from "@solana/spl-token";
+
+import { StakingPool, UserStakingAccount, GovernanceAccount, VoteRecord, VoteChoice, ProposalInfo } from "../types";
+
+// Helper function to get the program
+export const getProgram = () => {
+  const idl = require("./idl.json");
+  const walletKeypair = require("./ZSNIPE_Admin-wallet-keypair.json");
+
+  const adminKeypair = Keypair.fromSecretKey(new Uint8Array(walletKeypair));
+  const adminPublicKey = adminKeypair.publicKey;
+
+  const connection = new Connection("https://api.devnet.solana.com", "confirmed");
+
+  const programId = new PublicKey(
+    "758R2jFfces6Ue5B9rLmRrh8NesiU9dCtDa4bUSBpCMt"
+  );
+
+  const provider = new anchor.AnchorProvider(
+    connection,
+    new anchor.Wallet(adminKeypair),
+    anchor.AnchorProvider.defaultOptions()
+  );
+  anchor.setProvider(provider);
+
+  return {
+    program: new anchor.Program(idl, programId, provider),
+    adminPublicKey,
+    adminKeypair,
+    connection,    
+  };
+};
+
+// Seeds from smart contract
+const STAKING_POOL_SEED = "staking_poolV3";
+const PROGRAM_AUTHORITY_SEED = "program_authorityV1";
+const USER_STAKE_SEED = "user_stakeV1";
+const ESCROW_SEED = "escrowV1";
+const GOVERNANCE_SEED = "governanceV1";
+const PROPOSAL_SEED = "proposalV1";
+const PROPOSAL_ESCROW_SEED = "proposal_escrowV1";
+const VOTE_SEED = "voteV1";
+
+// Governance constants
+const MIN_STAKE_DURATION_FOR_VOTING = 0 * 86400; // 30 days in seconds
+export const MIN_STAKE_TO_PROPOSE = 100_000_000; // 100 ZSNIPE (was 10,000)
+export const MIN_STAKE_DURATION_TO_PROPOSE = 0 * 86400; // 1 day (was 30)
+export const PROPOSAL_DEPOSIT_AMOUNT = 100_000_000; // 100 ZSNIPE (was 1,000)
+
+// Helper functions for PDA derivation
+export function getStakingPoolPda(programId: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(STAKING_POOL_SEED)],
+    programId
+  );
+}
+
+export function getProgramAuthorityPda(programId: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(PROGRAM_AUTHORITY_SEED)],
+    programId
+  );
+}
+
+export function getUserStakePda(programId: PublicKey, userPublicKey: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(USER_STAKE_SEED), userPublicKey.toBuffer()],
+    programId
+  );
+}
+
+export function getEscrowTokenAccountPda(programId: PublicKey, stakingPool: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(ESCROW_SEED), stakingPool.toBuffer()],
+    programId
+  );
+}
+
+export function getGovernancePda(programId: PublicKey, userPublicKey: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(GOVERNANCE_SEED), userPublicKey.toBuffer()],
+    programId
+  );
+}
+
+export function getProposalPda(programId: PublicKey, proposalId: number): [PublicKey, number] {
+  const proposalIdBuffer = Buffer.alloc(8);
+  proposalIdBuffer.writeBigUInt64LE(BigInt(proposalId));
+  
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(PROPOSAL_SEED), proposalIdBuffer],
+    programId
+  );
+}
+
+export function getProposalEscrowPda(programId: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(PROPOSAL_ESCROW_SEED)],
+    programId
+  );
+}
+
+export function getVoteRecordPda(
+  programId: PublicKey, 
+  proposalId: number, 
+  voterPublicKey: PublicKey
+): [PublicKey, number] {
+  const proposalIdBuffer = Buffer.alloc(8);
+  proposalIdBuffer.writeBigUInt64LE(BigInt(proposalId));
+  
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(VOTE_SEED), proposalIdBuffer, voterPublicKey.toBuffer()],
+    programId
+  );
+}
+
+// === Initialize Staking Pool (Admin only) ===
+export async function createInitializeStakingPoolTransaction(adminPublicKey: PublicKey) {
+  const { program, connection } = getProgram()
+
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [programAuthority] = getProgramAuthorityPda(program.programId);
+  const [escrowTokenAccount] = getEscrowTokenAccountPda(program.programId, stakingPool);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+    
+    const transaction = await program.methods
+      .initializeStakingPool()
+      .accounts({
+        admin: adminPublicKey,
+        stakingPool: stakingPool,
+        programAuthority: programAuthority,
+        escrowTokenAccount: escrowTokenAccount,
+        tokenMint: tokenMintAddress,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      })
+      .transaction();
+
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = adminPublicKey;  
+
+    return {
+      success: true,
+      message: "Initialize staking pool transaction created successfully!",
+      transaction: transaction.serialize({ requireAllSignatures: false }).toString('base64'),
+      accounts: {
+        stakingPool: stakingPool.toString(),
+        programAuthority: programAuthority.toString(),
+        escrowTokenAccount: escrowTokenAccount.toString(),
+        tokenMint: tokenMintAddress.toString(),
+      }
+    };
+  } catch (error: any) {
+    console.error("Error creating initialize staking pool transaction:", error);
+    return { 
+      success: false, 
+      message: `Error creating initialize staking pool transaction: ${error.message || error}` 
+    };
+  }
+}
+
+// === Create Stake Tokens Transaction ===
+export async function createStakeTokensTransaction(userPublicKey: string, amount: number) {
+  const { program, connection } = getProgram();
+  const userPubKey = new PublicKey(userPublicKey);
+
+  // Get all required PDAs
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [programAuthority] = getProgramAuthorityPda(program.programId);
+  const [userStakingAccount] = getUserStakePda(program.programId, userPubKey);
+  const [escrowTokenAccount] = getEscrowTokenAccountPda(program.programId, stakingPool);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  // Get user's token account (associated token account)
+  const stakerTokenAccount = getAssociatedTokenAddressSync(
+    tokenMintAddress,
+    userPubKey,
+    false,
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+    
+    const transaction = await program.methods
+      .stake(new anchor.BN(amount * Math.pow(10, 6)))
+      .accounts({
+        staker: userPubKey,
+        stakingPool: stakingPool,
+        userStakingAccount: userStakingAccount,
+        programAuthority: programAuthority,
+        escrowTokenAccount: escrowTokenAccount,
+        stakerTokenAccount: stakerTokenAccount,
+        tokenMint: tokenMintAddress,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+      })
+      .transaction();
+
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = userPubKey;
+
+    return {
+      success: true,
+      message: "Stake tokens transaction created successfully!",
+      transaction: transaction.serialize({ requireAllSignatures: false }).toString('base64'),
+      accounts: {
+        userStakingAccount: userStakingAccount.toString(),
+        stakingPool: stakingPool.toString(),
+        escrowTokenAccount: escrowTokenAccount.toString(),
+        stakerTokenAccount: stakerTokenAccount.toString(),
+      }
+    };
+  } catch (error: any) {
+    console.error("Error creating stake tokens transaction:", error);
+    return { 
+      success: false, 
+      message: `Error creating stake tokens transaction: ${error.message || error}` 
+    };
+  }
+}
+
+// === Create Unstake Tokens Transaction ===
+export async function createUnstakeTokensTransaction(userPublicKey: string, amount: number) {
+  const { program, connection } = getProgram();
+  const userPubKey = new PublicKey(userPublicKey);
+
+  // Get all required PDAs
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [programAuthority] = getProgramAuthorityPda(program.programId);
+  const [userStakingAccount] = getUserStakePda(program.programId, userPubKey);
+  const [escrowTokenAccount] = getEscrowTokenAccountPda(program.programId, stakingPool);
+  const [governanceAccount] = getGovernancePda(program.programId, userPubKey);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  // Get user's token account (associated token account)
+  const stakerTokenAccount = getAssociatedTokenAddressSync(
+    tokenMintAddress,
+    userPubKey,
+    false,
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+    
+    const accounts: any = {
+      staker: userPubKey,
+      stakingPool: stakingPool,
+      userStakingAccount: userStakingAccount,
+      programAuthority: programAuthority,
+      escrowTokenAccount: escrowTokenAccount,
+      stakerTokenAccount: stakerTokenAccount,
+      tokenMint: tokenMintAddress,
+      tokenProgram: TOKEN_2022_PROGRAM_ID,
+    };
+
+    // Add governance account (it may or may not exist)
+    accounts.governanceAccount = governanceAccount;
+
+    const transaction = await program.methods
+      .unstake(new anchor.BN(amount * Math.pow(10, 6)))
+      .accounts(accounts)
+      .transaction();
+
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = userPubKey;
+
+    return {
+      success: true,
+      message: "Unstake tokens transaction created successfully!",
+      transaction: transaction.serialize({ requireAllSignatures: false }).toString('base64'),
+      accounts: {
+        userStakingAccount: userStakingAccount.toString(),
+        stakingPool: stakingPool.toString(),
+        escrowTokenAccount: escrowTokenAccount.toString(),
+        stakerTokenAccount: stakerTokenAccount.toString(),
+        governanceAccount: governanceAccount.toString(),
+      }
+    };
+  } catch (error: any) {
+    console.error("Error creating unstake tokens transaction:", error);
+    return { 
+      success: false, 
+      message: `Error creating unstake tokens transaction: ${error.message || error}` 
+    };
+  }
+}
+
+// === Create Initialize Governance Account Transaction ===
+export async function createInitializeGovernanceAccountTransaction(userPublicKey: string) {
+  const { program, connection } = getProgram();
+  const userPubKey = new PublicKey(userPublicKey);
+
+  const [governanceAccount] = getGovernancePda(program.programId, userPubKey);
+
+  try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+    
+    const transaction = await program.methods
+      .initializeGovernanceAccount()
+      .accounts({
+        staker: userPubKey,
+        governanceAccount: governanceAccount,
+        systemProgram: SystemProgram.programId,
+      })
+      .transaction();
+
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = userPubKey;
+
+    return {
+      success: true,
+      message: "Initialize governance account transaction created successfully!",
+      transaction: transaction.serialize({ requireAllSignatures: false }).toString('base64'),
+      accounts: {
+        governanceAccount: governanceAccount.toString(),
+      }
+    };
+  } catch (error: any) {
+    console.error("Error creating initialize governance account transaction:", error);
+    return { 
+      success: false, 
+      message: `Error creating initialize governance account transaction: ${error.message || error}` 
+    };
+  }
+}
+
+// === Create Calculate Voting Power Transaction ===
+export async function createCalculateVotingPowerTransaction(userPublicKey: string) {
+  const { program, connection } = getProgram();
+  const userPubKey = new PublicKey(userPublicKey);
+
+  const [userStakingAccount] = getUserStakePda(program.programId, userPubKey);
+  const [governanceAccount] = getGovernancePda(program.programId, userPubKey);
+
+  try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+    
+    const transaction = await program.methods
+      .calculateVotingPower()
+      .accounts({
+        staker: userPubKey,
+        userStakingAccount: userStakingAccount,
+        governanceAccount: governanceAccount,
+      })
+      .transaction();
+
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = userPubKey;
+
+    return {
+      success: true,
+      message: "Calculate voting power transaction created successfully!",
+      transaction: transaction.serialize({ requireAllSignatures: false }).toString('base64'),
+      accounts: {
+        userStakingAccount: userStakingAccount.toString(),
+        governanceAccount: governanceAccount.toString(),
+      }
+    };
+  } catch (error: any) {
+    console.error("Error creating calculate voting power transaction:", error);
+    return { 
+      success: false, 
+      message: `Error creating calculate voting power transaction: ${error.message || error}` 
+    };
+  }
+}
+
+// === Create Initialize Proposal Escrow Transaction (Admin only) ===
+export async function createInitializeProposalEscrowTransaction(adminPublicKey: PublicKey) {
+  const { program, connection } = getProgram();
+
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [programAuthority] = getProgramAuthorityPda(program.programId);
+  const [proposalEscrow] = getProposalEscrowPda(program.programId);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+    
+    const transaction = await program.methods
+      .initializeProposalEscrow()
+      .accounts({
+        admin: adminPublicKey,
+        stakingPool: stakingPool,
+        programAuthority: programAuthority,
+        proposalEscrow: proposalEscrow,
+        tokenMint: tokenMintAddress,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+      })
+      .transaction();
+
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = adminPublicKey;
+
+    return {
+      success: true,
+      message: "Initialize proposal escrow transaction created successfully!",
+      transaction: transaction.serialize({ requireAllSignatures: false }).toString('base64'),
+      accounts: {
+        proposalEscrow: proposalEscrow.toString(),
+        programAuthority: programAuthority.toString(),
+      }
+    };
+  } catch (error: any) {
+    console.error("Error creating initialize proposal escrow transaction:", error);
+    return { 
+      success: false, 
+      message: `Error creating initialize proposal escrow transaction: ${error.message || error}` 
+    };
+  }
+}
+
+// === Create Proposal Transaction ===
+export async function createProposalTransaction(
+  userPublicKey: string,
+  proposalId: number,
+  title: string,
+  description: string,
+  proposalType: number,
+  executionData: number[],
+  votingPeriod: number
+) {
+  const { program, connection } = getProgram();
+  const userPubKey = new PublicKey(userPublicKey);
+
+  // Get all required PDAs
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [programAuthority] = getProgramAuthorityPda(program.programId);
+  const [proposerStakingAccount] = getUserStakePda(program.programId, userPubKey);
+  const [proposerGovernanceAccount] = getGovernancePda(program.programId, userPubKey);
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+  const [depositEscrowAccount] = getProposalEscrowPda(program.programId);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  // Get proposer's token account
+  const proposerTokenAccount = getAssociatedTokenAddressSync(
+    tokenMintAddress,
+    userPubKey,
+    false,
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+    
+    const transaction = await program.methods
+      .createProposal(
+        new anchor.BN(proposalId),
+        title,
+        description,
+        { text: {} }, // ProposalType enum - adjust based on proposalType param
+        Buffer.from(executionData),
+        votingPeriod
+      )
+      .accounts({
+        proposer: userPubKey,
+        proposerStakingAccount: proposerStakingAccount,
+        proposerGovernanceAccount: proposerGovernanceAccount,
+        proposalAccount: proposalAccount,
+        stakingPool: stakingPool,
+        programAuthority: programAuthority,
+        proposerTokenAccount: proposerTokenAccount,
+        depositEscrowAccount: depositEscrowAccount,
+        depositTokenMint: tokenMintAddress,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+      })
+      .transaction();
+
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = userPubKey;
+
+    return {
+      success: true,
+      message: "Create proposal transaction created successfully!",
+      transaction: transaction.serialize({ requireAllSignatures: false }).toString('base64'),
+      accounts: {
+        proposalAccount: proposalAccount.toString(),
+        proposerStakingAccount: proposerStakingAccount.toString(),
+        proposerGovernanceAccount: proposerGovernanceAccount.toString(),
+        proposerTokenAccount: proposerTokenAccount.toString(),
+      }
+    };
+  } catch (error: any) {
+    console.error("Error creating proposal transaction:", error);
+    return { 
+      success: false, 
+      message: `Error creating proposal transaction: ${error.message || error}` 
+    };
+  }
+}
+
+// === Create Cast Vote Transaction ===
+export async function createCastVoteTransaction(
+  userPublicKey: string,
+  proposalId: number,
+  voteChoice: VoteChoice
+) {
+  const { program, connection } = getProgram();
+  const userPubKey = new PublicKey(userPublicKey);
+
+  // Get all required PDAs
+  const [userStakingAccount] = getUserStakePda(program.programId, userPubKey);
+  const [governanceAccount] = getGovernancePda(program.programId, userPubKey);
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+  const [voteRecord] = getVoteRecordPda(program.programId, proposalId, userPubKey);
+
+  // Convert VoteChoice enum to the format expected by Anchor
+  let voteChoiceAnchor: any;
+  switch (voteChoice) {
+    case VoteChoice.Yes:
+      voteChoiceAnchor = { yes: {} };
+      break;
+    case VoteChoice.No:
+      voteChoiceAnchor = { no: {} };
+      break;
+    case VoteChoice.Abstain:
+      voteChoiceAnchor = { abstain: {} };
+      break;
+    default:
+      throw new Error("Invalid vote choice");
+  }
+
+  try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+    
+    const transaction = await program.methods
+      .castVote(voteChoiceAnchor)
+      .accounts({
+        voter: userPubKey,
+        userStakingAccount: userStakingAccount,
+        governanceAccount: governanceAccount,
+        proposalAccount: proposalAccount,
+        voteRecord: voteRecord,
+        systemProgram: SystemProgram.programId,
+      })
+      .transaction();
+
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = userPubKey;
+
+    return {
+      success: true,
+      message: "Cast vote transaction created successfully!",
+      transaction: transaction.serialize({ requireAllSignatures: false }).toString('base64'),
+      accounts: {
+        voteRecord: voteRecord.toString(),
+        proposalAccount: proposalAccount.toString(),
+        userStakingAccount: userStakingAccount.toString(),
+        governanceAccount: governanceAccount.toString(),
+      }
+    };
+  } catch (error: any) {
+    console.error("Error creating cast vote transaction:", error);
+    return { 
+      success: false, 
+      message: `Error creating cast vote transaction: ${error.message || error}` 
+    };
+  }
+}
+
+// === Get Account Information (Read-only functions) ===
+export async function getStakingPoolInfo() {
+  const { program } = getProgram();
+  const [stakingPool] = getStakingPoolPda(program.programId);
+
+  try {
+    const poolInfo = await program.account.stakingPool.fetch(stakingPool) as StakingPool;
+    
+    return {
+      success: true,
+      data: {
+        authority: poolInfo.authority.toString(),
+        initializer: poolInfo.initializer.toString(),
+        totalStakedAmount: poolInfo.totalStakedAmount.toString(),
+        mintAddress: poolInfo.mintAddress.toString(),
+        escrowAccount: poolInfo.escrowAccount.toString(),
+        isActive: poolInfo.isActive,
+        tokenPriceUsdMicro: poolInfo.tokenPriceUsdMicro.toString(),
+        createdAt: poolInfo.createdAt.toNumber(),
+        priceLastUpdated: poolInfo.priceLastUpdated.toNumber(),
+      }
+    };
+  } catch (error: any) {
+    console.error("Error fetching staking pool info:", error);
+    return { success: false, error: error.message || 'Failed to fetch staking pool info' };
+  }
+}
+
+export async function getUserStakingInfo(userPublicKey: string) {
+  const { program } = getProgram();
+  const userPubKey = new PublicKey(userPublicKey);
+  const [userStakingAccount] = getUserStakePda(program.programId, userPubKey);
+
+  try {
+    const stakingInfo = await program.account.userStakingAccount.fetch(userStakingAccount) as UserStakingAccount;
+    
+    return {
+      success: true,
+      data: {
+        staker: stakingInfo.staker.toString(),
+        stakedAmount: stakingInfo.stakedAmount.toNumber(),
+        timestamp: stakingInfo.timestamp.toNumber(),
+        lastUpdated: stakingInfo.lastUpdated.toNumber(),
+        bump: stakingInfo.bump,
+      }
+    };
+  } catch (error: any) {
+    console.error("Error fetching user staking info:", error);
+    return { success: false, error: 'User has not staked yet or account does not exist' };
+  }
+}
+
+export async function getGovernanceAccountInfo(userPublicKey: string) {
+  const { program } = getProgram();
+  const userPubKey = new PublicKey(userPublicKey);
+  const [governanceAccount] = getGovernancePda(program.programId, userPubKey);
+
+  try {
+    const govInfo = await program.account.governanceAccount.fetch(governanceAccount) as GovernanceAccount;
+    const currentTime = Math.floor(Date.now() / 1000);
+    const isLocked = govInfo.stakeLockEnd.toNumber() > currentTime;
+
+    return {
+      success: true,
+      data: {
+        staker: govInfo.staker.toString(),
+        participationCount: govInfo.participationCount,
+        lastVoteTimestamp: govInfo.lastVoteTimestamp.toNumber(),
+        stakeLockEnd: govInfo.stakeLockEnd.toNumber(),
+        isCurrentlyLocked: isLocked,
+        votingPowerCache: govInfo.votingPowerCache.toNumber(),
+        createdAt: govInfo.createdAt.toNumber(),
+      }
+    };
+  } catch (error: any) {
+    console.error("Error fetching governance account info:", error);
+    return { success: false, error: 'Governance account not initialized' };
+  }
+}
+
+export async function getProposalInfo(proposalId: number) {
+  const { program } = getProgram();
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+
+  try {
+    const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    
+    return {
+      success: true,
+      data: {
+        proposalId: proposalData.proposalId,
+        title: proposalData.title,
+        description: proposalData.description,
+        proposer: proposalData.proposer.toString(),
+        proposalType: proposalData.proposalType,
+        status: proposalData.status,
+        votingPeriodDays: proposalData.votingPeriodDays,
+        createdAt: Number(proposalData.createdAt),
+        votingEndsAt: Number(proposalData.votingEndsAt),
+        finalizedAt: Number(proposalData.finalizedAt),
+        executedAt: Number(proposalData.executedAt),
+        timelockEnd: Number(proposalData.timelockEnd),
+        votes: {
+          yes: Number(proposalData.yesVotes),
+          no: Number(proposalData.noVotes),
+          abstain: Number(proposalData.abstainVotes),
+        },
+        totalVoters: proposalData.totalVoters,
+        depositAmount: Number(proposalData.depositAmount) / 1_000_000,
+        depositRefunded: proposalData.depositRefunded,
+        proposalAccount: proposalAccount.toString(),
+      }
+    };
+  } catch (error) {
+    console.error(`Error fetching proposal #${proposalId}:`, error);
+    return { success: false, error: `Proposal #${proposalId} does not exist` };
+  }
+}
+
+export async function getAllProposals(maxProposalId: number = 10) {
+  const { program } = getProgram();
+  const proposals = [];
+
+  for (let i = 0; i <= maxProposalId; i++) {
+    try {
+      const [proposalAccount] = getProposalPda(program.programId, i);
+      const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+      
+      proposals.push({
+        proposalId: i,
+        title: proposalData.title,
+        proposer: proposalData.proposer.toString(),
+        status: proposalData.status,
+        votingEndsAt: Number(proposalData.votingEndsAt),
+        totalVotes: Number(proposalData.yesVotes) + 
+                    Number(proposalData.noVotes) + 
+                    Number(proposalData.abstainVotes),
+      });
+    } catch (error: any) {
+      // Proposal doesn't exist, skip
+      continue;
+    }
+  }
+
+  return {
+    success: true,
+    count: proposals.length,
+    proposals,
+  };
+}
+
+export async function getVoteRecord(proposalId: number, userPublicKey: string) {
+  const { program } = getProgram();
+  const userPubKey = new PublicKey(userPublicKey);
+  const [voteRecord] = getVoteRecordPda(program.programId, proposalId, userPubKey);
+
+  try {
+    const voteData = await program.account.voteRecord.fetch(voteRecord) as VoteRecord;
+    
+    const voteChoice = Object.keys(voteData.voteChoice)[0];
+    
+    return {
+      success: true,
+      data: {
+        voter: voteData.voter.toString(),
+        proposalId: voteData.proposalId.toString(),
+        voteChoice: voteChoice,
+        votingPower: voteData.votingPower.toString(),
+        votedAt: voteData.votedAt.toNumber(),
+        votedAtDate: new Date(voteData.votedAt.toNumber() * 1000).toISOString(),
+      },
+      voteRecordAddress: voteRecord.toString(),
+    };
+  } catch (error: any) {
+    console.error("Error fetching vote record:", error);
+    return { success: false, error: 'User has not voted on this proposal' };
+  }
+}
+
+// === Client-side Voting Power Calculation (for preview) ===
+export function calculateHybridVotingPower(stakeAmount: number, stakeDurationDays: number): number {
+  // Convert micro-tokens to tokens
+  const tokens = stakeAmount / 1_000_000;
+  
+  let basePower: number;
+  if (tokens <= 100_000) {
+    basePower = tokens;
+  } else {
+    basePower = 100_000 + Math.floor(Math.sqrt(tokens - 100_000));
+  }
+
+  let timeMultiplier: number;
+  if (stakeDurationDays <= 30) {
+    timeMultiplier = 100;
+  } else if (stakeDurationDays <= 90) {
+    timeMultiplier = 120;
+  } else if (stakeDurationDays <= 365) {
+    timeMultiplier = 150;
+  } else {
+    timeMultiplier = 200;
+  }
+
+  return Math.floor((basePower * timeMultiplier) / 100);
+}
+
+// === Check Voting Eligibility ===
+export async function checkVotingEligibility(userPublicKey: string) {
+  const { program } = getProgram();
+  const userPubKey = new PublicKey(userPublicKey);
+  const [userStakingAccount] = getUserStakePda(program.programId, userPubKey);
+
+  try {
+    const stakingInfo = await program.account.userStakingAccount.fetch(userStakingAccount) as UserStakingAccount;
+    const currentTime = Math.floor(Date.now() / 1000);
+    const stakeTimestamp = stakingInfo.timestamp.toNumber();
+    const stakeDurationSeconds = currentTime - stakeTimestamp;
+    const stakeDurationDays = Math.floor(stakeDurationSeconds / (24 * 60 * 60));
+
+    const isEligible = stakeDurationSeconds >= MIN_STAKE_DURATION_FOR_VOTING;
+    const stakedAmount = stakingInfo.stakedAmount.toNumber();
+
+    return {
+      success: true,
+      data: {
+        isEligible: isEligible,
+        stakedAmount: stakedAmount,
+        stakeDurationDays: stakeDurationDays,
+        minimumDaysRequired: 30,
+        estimatedVotingPower: isEligible ? calculateHybridVotingPower(stakedAmount, stakeDurationDays) : 0,
+      }
+    };
+  } catch (error: any) {
+    console.error("Error checking voting eligibility:", error);
+    if (error.message && error.message.includes("Account does not exist")) {
+      return {
+        success: false,
+        data: {
+          isEligible: false,
+          message: "User has not staked any tokens yet",
+        }
+      };
+    }
+    return { success: false, error: error.message || 'Failed to check voting eligibility' };
+  }
+}
