@@ -4,7 +4,7 @@ use anchor_spl::{
     token_interface::{transfer_checked, Mint, TokenAccount, TokenInterface, TransferChecked},
 };
 
-declare_id!("629dBzrHwL12uJS1nN8VyomiWgRTtVWqdmSUJLcpxjyu");
+declare_id!("758R2jFfces6Ue5B9rLmRrh8NesiU9dCtDa4bUSBpCMt");
 
 // Proposal creation requirements
 // pub const MIN_STAKE_TO_PROPOSE: u64 = 10_000_000_000;
@@ -13,7 +13,11 @@ pub const PROPOSAL_DEPOSIT_AMOUNT: u64 = 100_000_000;
 pub const MAX_ACTIVE_PROPOSALS: u8 = 3;
 //change these for testing:
 pub const MIN_STAKE_TO_PROPOSE: u64 = 100_000_000; // 100 ZSNIPE (instead of 10,000)
-pub const MAX_STAKE_DURATION_TO_PROPOSE: i64 = 1 * 86400; // 1 day (instead of 30)
+pub const MAX_STAKE_DURATION_TO_PROPOSE: i64 = 0 * 86400; // 1 day (instead of 30)
+
+//cast vote constants
+pub const MIN_STAKE_DURATION_FOR_VOTING: i64 = 0 * 86400;
+pub const VOTE_LOCK_PERIOD: i64 = 0 * 86400;
 
 // String length limits
 pub const MAX_TITLE_LENGTH: usize = 100;
@@ -31,9 +35,14 @@ pub const VALID_VOTING_PERIODS: [u8; 3] = [
 ];
 
 // Seeds
-pub const PROPOSAL_SEED: &[u8] = b"proposal";
-pub const VOTE_SEED: &[u8] = b"vote";
-pub const GOVERNANCE_CONFIG_SEED: &[u8] = b"governance_config";
+pub const PROPOSAL_SEED: &[u8] = b"proposalV1";
+pub const PROPOSAL_ESCROW_SEED: &[u8] = b"proposal_escrowV1";
+pub const VOTE_SEED: &[u8] = b"voteV1";
+pub const STAKING_POOL_SEED: &[u8] = b"staking_poolV3";
+pub const PROGRAM_AUTHORITY_SEED: &[u8] = b"program_authorityV1";
+pub const USER_STAKE_SEED: &[u8] = b"user_stakeV1";
+pub const STAKING_POOL_ESCROW_SEED: &[u8] = b"escrowV1";
+pub const GOVERNANCE_SEED: &[u8] = b"governanceV1";
 
 // Governance Enums
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -100,7 +109,7 @@ pub mod zero_sided_snipe {
 
         // Set the authority as program PDA
         let (program_authority, authority_bump) =
-            Pubkey::find_program_address(&[b"program_authority"], ctx.program_id);
+            Pubkey::find_program_address(&[PROGRAM_AUTHORITY_SEED], ctx.program_id);
 
         staking_pool.authority = program_authority;
         staking_pool.authority_bump = authority_bump;
@@ -183,7 +192,7 @@ pub mod zero_sided_snipe {
         }
 
         let authority_bump = &[staking_pool.authority_bump];
-        let authority_seeds = &[b"program_authority".as_ref(), authority_bump.as_ref()];
+        let authority_seeds = &[PROGRAM_AUTHORITY_SEED.as_ref(), authority_bump.as_ref()];
         let signer_seeds = &[&authority_seeds[..]];
 
         transfer_checked(
@@ -372,26 +381,121 @@ pub mod zero_sided_snipe {
         Ok(())
     }
 
+    pub fn cast_vote(ctx: Context<CastVote>, vote_choice: VoteChoice) -> Result<()> {
+        let proposal = &mut ctx.accounts.proposal_account;
+        let governance_account = &mut ctx.accounts.governance_account;
+        let user_staking_account = &ctx.accounts.user_staking_account;
+        let vote_record = &mut ctx.accounts.vote_record;
+        let clock = Clock::get()?;
+
+        // ===== VALIDATION 1: Proposal Must Be Active =====
+        require!(
+            proposal.status == ProposalStatus::Active,
+            ErrorCode::ProposalNotActive
+        );
+
+        // ===== VALIDATION 2: Voting Period Not Ended =====
+        require!(
+            clock.unix_timestamp < proposal.voting_ends_at,
+            ErrorCode::VotingPeriodEnded
+        );
+
+        // ===== VALIDATION 3: Stake Duration Requirement (30+ days) =====
+        let stake_duration = clock.unix_timestamp - user_staking_account.timestamp;
+        require!(
+            stake_duration >= MIN_STAKE_DURATION_FOR_VOTING,
+            ErrorCode::InsufficientStakeDurationToVote
+        );
+
+        // ===== VALIDATION 4: Voting Power Must Be Calculated =====
+        require!(
+            governance_account.voting_power_cache > 0,
+            ErrorCode::VotingPowerNotCalculated
+        );
+
+        // ===== GET VOTING POWER (from cache, no recalculation) =====
+        let voting_power = governance_account.voting_power_cache;
+
+        // ===== UPDATE PROPOSAL VOTE COUNTS =====
+        match vote_choice {
+            VoteChoice::Yes => {
+                proposal.yes_votes = proposal
+                    .yes_votes
+                    .checked_add(voting_power)
+                    .ok_or(ErrorCode::InvalidAmount)?;
+            }
+            VoteChoice::No => {
+                proposal.no_votes = proposal
+                    .no_votes
+                    .checked_add(voting_power)
+                    .ok_or(ErrorCode::InvalidAmount)?;
+            }
+            VoteChoice::Abstain => {
+                proposal.abstain_votes = proposal
+                    .abstain_votes
+                    .checked_add(voting_power)
+                    .ok_or(ErrorCode::InvalidAmount)?;
+            }
+        }
+
+        // ===== INCREMENT TOTAL VOTERS =====
+        proposal.total_voters = proposal
+            .total_voters
+            .checked_add(1)
+            .ok_or(ErrorCode::InvalidAmount)?;
+
+        // ===== SET TOKEN LOCK (voting_ends_at + 3 days) =====
+        let lock_end = proposal
+            .voting_ends_at
+            .checked_add(VOTE_LOCK_PERIOD)
+            .ok_or(ErrorCode::InvalidAmount)?;
+
+        governance_account.stake_lock_end = lock_end;
+        governance_account.last_vote_timestamp = clock.unix_timestamp;
+        governance_account.participation_count = governance_account
+            .participation_count
+            .checked_add(1)
+            .ok_or(ErrorCode::InvalidAmount)?;
+
+        // ===== INITIALIZE VOTE RECORD (prevents double voting) =====
+        vote_record.voter = ctx.accounts.voter.key();
+        vote_record.proposal_id = proposal.proposal_id;
+        vote_record.vote_choice = vote_choice;
+        vote_record.voting_power = voting_power;
+        vote_record.voted_at = clock.unix_timestamp;
+        vote_record.bump = ctx.bumps.vote_record;
+
+        // ===== LOG SUCCESS =====
+        msg!("✅ Vote cast successfully!");
+        msg!("👤 Voter: {}", ctx.accounts.voter.key());
+        msg!("📋 Proposal: #{}", proposal.proposal_id);
+        msg!("🗳️  Choice: {:?}", vote_choice);
+        msg!("⚡ Voting Power: {}", voting_power);
+        msg!("🔒 Tokens locked until: {} (Unix timestamp)", lock_end);
+
+        Ok(())
+    }
+
 }
 
-// Hybrid voting power calculation function
 fn calculate_hybrid_voting_power(stake_amount: u64, stake_duration_days: u32) -> u64 {
-    // Base power calculation (linear up to 100K, then quadratic)
-    let base_power = if stake_amount <= 100_000 {
-        stake_amount
+    // Convert micro-tokens to tokens for calculation
+    let tokens = stake_amount / 1_000_000; // 999,000,000 / 1,000,000 = 999
+
+    let base_power = if tokens <= 100_000 {
+        tokens // Returns 999
     } else {
-        100_000 + ((stake_amount - 100_000) as f64).sqrt() as u64
+        100_000 + ((tokens - 100_000) as f64).sqrt() as u64
     };
 
-    // Time multiplier based on stake duration
     let time_multiplier = match stake_duration_days {
-        0..=30 => 100,   // 1.0x
-        31..=90 => 120,  // 1.2x
-        91..=365 => 150, // 1.5x
-        _ => 200,        // 2.0x maximum
+        0..=30 => 100, // 0 days = 100
+        31..=90 => 120,
+        91..=365 => 150,
+        _ => 200,
     };
 
-    (base_power * time_multiplier) / 100
+    (base_power * time_multiplier) / 100 // (999 × 100) / 100 = 999
 }
 
 // === ACCOUNT STRUCTURES ===
@@ -463,6 +567,18 @@ pub struct ProposalAccount {
     pub reserved: [u8; 32],          // 32 bytes
 }
 
+// Vote record
+#[account]
+pub struct VoteRecord {
+    pub voter: Pubkey,           // 32 bytes
+    pub proposal_id: u64,        // 8 bytes
+    pub vote_choice: VoteChoice, // 1 byte
+    pub voting_power: u64,       // 8 bytes
+    pub voted_at: i64,           // 8 bytes
+    pub bump: u8,                // 1 byte
+}
+// Total: 58 bytes + 8 discriminator = 66 bytes (using 82 for safety)
+
 // === ACCOUNT CONTEXTS ===
 
 #[derive(Accounts)]
@@ -473,14 +589,14 @@ pub struct InitializeStakingPool<'info> {
     #[account(
         init,
         payer = admin,
-        space = 8 + 161, // Much smaller space requirement
-        seeds = [b"staking_poolV2"],
+        space = 8 + 163, // Much smaller space requirement
+        seeds = [STAKING_POOL_SEED],
         bump
     )]
     pub staking_pool: Account<'info, StakingPool>,
 
     #[account(
-        seeds = [b"program_authority"],
+        seeds = [PROGRAM_AUTHORITY_SEED],
         bump
     )]
     /// CHECK: Program authority PDA
@@ -491,7 +607,7 @@ pub struct InitializeStakingPool<'info> {
         payer = admin,
         token::mint = token_mint,  
         token::authority = program_authority,
-        seeds = [b"escrow", staking_pool.key().as_ref()],
+        seeds = [STAKING_POOL_ESCROW_SEED, staking_pool.key().as_ref()],
         bump
     )]
     pub escrow_token_account: InterfaceAccount<'info, TokenAccount>,
@@ -513,7 +629,7 @@ pub struct Stake<'info> {
 
     #[account(
         mut,
-        seeds = [b"staking_poolV2"],
+        seeds = [STAKING_POOL_SEED],
         bump = staking_pool.bump,
         constraint = staking_pool.is_active @ ErrorCode::PoolNotActive,
     )]
@@ -523,13 +639,13 @@ pub struct Stake<'info> {
         init_if_needed,
         payer = staker,
         space = 8 + 57, // Much smaller space
-        seeds = [b"user_stake", staker.key().as_ref()],
+        seeds = [USER_STAKE_SEED, staker.key().as_ref()],
         bump,
     )]
     pub user_staking_account: Account<'info, UserStakingAccount>,
 
     #[account(
-        seeds = [b"program_authority"],
+        seeds = [PROGRAM_AUTHORITY_SEED],
         bump = staking_pool.authority_bump
     )]
     /// CHECK: Program authority PDA
@@ -537,7 +653,7 @@ pub struct Stake<'info> {
 
     #[account(
         mut,
-        seeds = [b"escrow", staking_pool.key().as_ref()],
+        seeds = [STAKING_POOL_ESCROW_SEED, staking_pool.key().as_ref()],
         bump,
         constraint = escrow_token_account.key() == staking_pool.escrow_account @ ErrorCode::InvalidTokenMint,
     )]
@@ -567,7 +683,7 @@ pub struct Unstake<'info> {
 
     #[account(
         mut,
-        seeds = [b"staking_poolV2"],
+        seeds = [STAKING_POOL_SEED],
         bump = staking_pool.bump,
         constraint = staking_pool.is_active @ ErrorCode::PoolNotActive,
     )]
@@ -575,7 +691,7 @@ pub struct Unstake<'info> {
 
     #[account(
         mut,
-        seeds = [b"user_stake", staker.key().as_ref()],
+        seeds = [USER_STAKE_SEED, staker.key().as_ref()],
         bump = user_staking_account.bump,
         constraint = user_staking_account.staker == staker.key() @ ErrorCode::UnauthorizedStaker,
     )]
@@ -583,13 +699,13 @@ pub struct Unstake<'info> {
 
     // Optional governance account - only needed if user participates in governance
     #[account(
-        seeds = [b"governance", staker.key().as_ref()],
+        seeds = [GOVERNANCE_SEED, staker.key().as_ref()],
         bump = governance_account.bump,
     )]
     pub governance_account: Option<Account<'info, GovernanceAccount>>,
 
     #[account(
-        seeds = [b"program_authority"],
+        seeds = [PROGRAM_AUTHORITY_SEED],
         bump = staking_pool.authority_bump
     )]
     /// CHECK: Program authority PDA
@@ -597,7 +713,7 @@ pub struct Unstake<'info> {
 
     #[account(
         mut,
-        seeds = [b"escrow", staking_pool.key().as_ref()],
+        seeds = [STAKING_POOL_ESCROW_SEED, staking_pool.key().as_ref()],
         bump,
     )]
     pub escrow_token_account: InterfaceAccount<'info, TokenAccount>,
@@ -627,7 +743,7 @@ pub struct InitializeGovernanceAccount<'info> {
         init,
         payer = staker,
         space = 8 + 69,
-        seeds = [b"governance", staker.key().as_ref()],
+        seeds = [GOVERNANCE_SEED, staker.key().as_ref()],
         bump
     )]
     pub governance_account: Account<'info, GovernanceAccount>,
@@ -640,7 +756,7 @@ pub struct CalculateVotingPower<'info> {
     pub staker: Signer<'info>,
 
     #[account(
-        seeds = [b"user_stake", staker.key().as_ref()],
+        seeds = [USER_STAKE_SEED, staker.key().as_ref()],
         bump = user_staking_account.bump,
         constraint = user_staking_account.staker == staker.key() @ ErrorCode::UnauthorizedStaker,
     )]
@@ -648,7 +764,7 @@ pub struct CalculateVotingPower<'info> {
 
     #[account(
         mut,
-        seeds = [b"governance", staker.key().as_ref()],
+        seeds = [GOVERNANCE_SEED, staker.key().as_ref()],
         bump = governance_account.bump,
     )]
     pub governance_account: Account<'info, GovernanceAccount>,
@@ -661,14 +777,14 @@ pub struct InitializeProposalEscrow<'info> {
 
     /// Staking pool (to get program authority)
     #[account(
-        seeds = [b"staking_poolV2"],
+        seeds = [STAKING_POOL_SEED],
         bump = staking_pool.bump,
     )]
     pub staking_pool: Account<'info, StakingPool>,
 
     /// Program authority (owns the escrow)
     #[account(
-        seeds = [b"program_authority"],
+        seeds = [PROGRAM_AUTHORITY_SEED],
         bump = staking_pool.authority_bump
     )]
     /// CHECK: Program authority PDA
@@ -680,7 +796,7 @@ pub struct InitializeProposalEscrow<'info> {
         payer = admin,
         token::mint = token_mint,
         token::authority = program_authority,
-        seeds = [b"proposal_escrow"],
+        seeds = [PROPOSAL_ESCROW_SEED],
         bump
     )]
     pub proposal_escrow: InterfaceAccount<'info, TokenAccount>,
@@ -704,7 +820,7 @@ pub struct CreateProposal<'info> {
 
     /// The proposer's staking account (to verify stake amount and duration)
     #[account(
-        seeds = [b"user_stake", proposer.key().as_ref()],
+        seeds = [USER_STAKE_SEED, proposer.key().as_ref()],
         bump = proposer_staking_account.bump,
         constraint = proposer_staking_account.staker == proposer.key() @ ErrorCode::UnauthorizedStaker,
     )]
@@ -712,7 +828,7 @@ pub struct CreateProposal<'info> {
 
     /// The proposer's governance account (to verify voting power is calculated)
     #[account(
-        seeds = [b"governance", proposer.key().as_ref()],
+        seeds = [GOVERNANCE_SEED, proposer.key().as_ref()],
         bump = proposer_governance_account.bump,
         constraint = proposer_governance_account.staker == proposer.key() @ ErrorCode::UnauthorizedStaker,
     )]
@@ -722,7 +838,7 @@ pub struct CreateProposal<'info> {
     #[account(
         init,
         payer = proposer,
-        space = 8 + 1057,  // discriminator + ProposalAccount size
+        space = 8 + 2700,  // discriminator + ProposalAccount size
         seeds = [PROPOSAL_SEED, proposal_id.to_le_bytes().as_ref()],
         bump
     )]
@@ -730,14 +846,14 @@ pub struct CreateProposal<'info> {
 
     /// Staking pool (to access program authority for escrow)
     #[account(
-        seeds = [b"staking_poolV2"],
+        seeds = [STAKING_POOL_SEED],
         bump = staking_pool.bump,
     )]
     pub staking_pool: Account<'info, StakingPool>,
 
     /// Program authority (for signing deposit transfer to escrow)
     #[account(
-        seeds = [b"program_authority"],
+        seeds = [PROGRAM_AUTHORITY_SEED],
         bump = staking_pool.authority_bump
     )]
     /// CHECK: Program authority PDA
@@ -755,7 +871,7 @@ pub struct CreateProposal<'info> {
     /// Deposit escrow account (holds proposal deposits)
     #[account(
         mut,
-        seeds = [b"proposal_escrow"],
+        seeds = [PROPOSAL_ESCROW_SEED],
         bump,
     )]
     pub deposit_escrow_account: InterfaceAccount<'info, TokenAccount>,
@@ -771,6 +887,51 @@ pub struct CreateProposal<'info> {
 
     /// Token program (Token-2022)
     pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+#[instruction(vote_choice: VoteChoice)]
+pub struct CastVote<'info> {
+    /// The voter casting their vote
+    #[account(mut)]
+    pub voter: Signer<'info>,
+
+    /// The voter's staking account (to verify stake duration)
+    #[account(
+        seeds = [USER_STAKE_SEED, voter.key().as_ref()],
+        bump = user_staking_account.bump,
+        constraint = user_staking_account.staker == voter.key() @ ErrorCode::UnauthorizedStaker,
+    )]
+    pub user_staking_account: Account<'info, UserStakingAccount>,
+
+    /// The voter's governance account (for voting power and lock)
+    #[account(
+        mut,
+        seeds = [GOVERNANCE_SEED, voter.key().as_ref()],
+        bump = governance_account.bump,
+        constraint = governance_account.staker == voter.key() @ ErrorCode::UnauthorizedStaker,
+    )]
+    pub governance_account: Account<'info, GovernanceAccount>,
+
+    /// The proposal being voted on
+    #[account(
+        mut,
+        seeds = [PROPOSAL_SEED, proposal_account.proposal_id.to_le_bytes().as_ref()],
+        bump = proposal_account.bump,
+    )]
+    pub proposal_account: Account<'info, ProposalAccount>,
+
+    /// Vote record (PDA ensures uniqueness - prevents double voting)
+    #[account(
+        init,
+        payer = voter,
+        space = 8 + 82, // discriminator + VoteRecord size
+        seeds = [VOTE_SEED, proposal_account.proposal_id.to_le_bytes().as_ref(), voter.key().as_ref()],
+        bump
+    )]
+    pub vote_record: Account<'info, VoteRecord>,
+
+    pub system_program: Program<'info, System>,
 }
 
 #[error_code]
@@ -837,4 +998,19 @@ pub enum ErrorCode {
 
     #[msg("Invalid voting period - must be 3, 7, or 14 days")]
     InvalidVotingPeriod,
+
+    #[msg("Proposal is not active - cannot vote")]
+    ProposalNotActive,
+
+    #[msg("Voting period has ended")]
+    VotingPeriodEnded,
+
+    #[msg("Insufficient stake duration to vote - minimum 30 days required")]
+    InsufficientStakeDurationToVote,
+
+    #[msg("Voting power not calculated - call calculate_voting_power first")]
+    VotingPowerNotCalculated,
+
+    #[msg("Already voted on this proposal - vote changes not allowed")]
+    AlreadyVoted,
 }

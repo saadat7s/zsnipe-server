@@ -90,7 +90,7 @@ const PROPOSAL_ESCROW_SEED = "proposal_escrowV1";
 const VOTE_SEED = "voteV1";
 
 // // Governance constants
-const MIN_STAKE_DURATION_FOR_VOTING = 1 * 86400; // 30 days in seconds
+const MIN_STAKE_DURATION_FOR_VOTING = 0 * 86400; // 30 days in seconds
 // // Proposal configuration constants
 // export const MIN_STAKE_TO_PROPOSE = 10_000_000_000; // 10,000 ZSNIPE tokens (with 6 decimals)
 // export const MIN_STAKE_DURATION_TO_PROPOSE = 30 * 24 * 60 * 60; // 30 days in seconds
@@ -98,7 +98,7 @@ const MIN_STAKE_DURATION_FOR_VOTING = 1 * 86400; // 30 days in seconds
 
 // TEMPORARY TEST VALUES - Change back for production!
 export const MIN_STAKE_TO_PROPOSE = 100_000_000; // 100 ZSNIPE (was 10,000)
-export const MIN_STAKE_DURATION_TO_PROPOSE = 1 * 86400; // 1 day (was 30)
+export const MIN_STAKE_DURATION_TO_PROPOSE = 0 * 86400; // 1 day (was 30)
 export const PROPOSAL_DEPOSIT_AMOUNT = 100_000_000; // 100 ZSNIPE (was 1,000)
 
 // Helper functions for PDA derivation
@@ -513,29 +513,29 @@ export async function calculateVotingPower(userKeypair?: Keypair) {
 
 // === Client-side Voting Power Calculation (for preview) ===
 export function calculateHybridVotingPower(stakeAmount: number, stakeDurationDays: number): number {
-  // Base power calculation (linear up to 100K, then quadratic)
+  // Convert micro-tokens to tokens
+  const tokens = stakeAmount / 1_000_000;
+  
   let basePower: number;
-  if (stakeAmount <= 100_000) {
-    basePower = stakeAmount;
+  if (tokens <= 100_000) {
+    basePower = tokens;
   } else {
-    basePower = 100_000 + Math.floor(Math.sqrt(stakeAmount - 100_000));
+    basePower = 100_000 + Math.floor(Math.sqrt(tokens - 100_000));
   }
 
-  // Time multiplier based on stake duration
   let timeMultiplier: number;
   if (stakeDurationDays <= 30) {
-    timeMultiplier = 100; // 1.0x
+    timeMultiplier = 100;
   } else if (stakeDurationDays <= 90) {
-    timeMultiplier = 120; // 1.2x
+    timeMultiplier = 120;
   } else if (stakeDurationDays <= 365) {
-    timeMultiplier = 150; // 1.5x
+    timeMultiplier = 150;
   } else {
-    timeMultiplier = 200; // 2.0x maximum
+    timeMultiplier = 200;
   }
 
   return Math.floor((basePower * timeMultiplier) / 100);
 }
-
 // === Check Voting Eligibility ===
 export async function checkVotingEligibility(userKeypair?: Keypair) {
   const { program, adminKeypair } = getProgram();
@@ -798,7 +798,7 @@ export async function getAllWalletsStatus() {
         walletNumber: wallet.walletNumber,
         publicKey: wallet.publicKey.toString(),
         tokenBalance: balance?.balance || 0,
-        stakedAmount: stakingInfo?.stakedAmount?.toNumber() || 0,
+        stakedAmount: stakingInfo?.stakedAmount || 0, // Already a number, no .toNumber()
         canVote: eligibility.isEligible,
         stakeDuration: eligibility.stakeDurationDays || 0,
         votingPower: eligibility.estimatedVotingPower || 0,
@@ -821,7 +821,6 @@ export async function getAllWalletsStatus() {
     wallets: results,
   };
 }
-
 // === Bulk Operations ===
 export async function bulkStakeTokens(amount: number, walletNumbers?: number[]) {
   const targetWallets = walletNumbers || [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -1208,7 +1207,7 @@ export async function castVote(
 
     console.log(`Stake duration: ${stakeDurationDays} days`);
 
-    if (stakeDuration < 1 * 86400) { // Using test value of 1 day
+    if (stakeDuration < 0 * 86400) { // Using test value of 1 day
       throw new Error(`Insufficient stake duration. Need 1 day, have ${stakeDurationDays} days`);
     }
   } catch (error: any) {
