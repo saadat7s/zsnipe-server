@@ -83,8 +83,21 @@ const USER_STAKE_SEED = "user_stake";
 const ESCROW_SEED = "escrow";
 const GOVERNANCE_SEED = "governance";
 
-// Governance constants
+
+const PROPOSAL_SEED = "proposal";
+const PROPOSAL_ESCROW_SEED = "proposal_escrow";
+
+// // Governance constants
 const MIN_STAKE_DURATION_FOR_VOTING = 30 * 24 * 60 * 60; // 30 days in seconds
+// // Proposal configuration constants
+// export const MIN_STAKE_TO_PROPOSE = 10_000_000_000; // 10,000 ZSNIPE tokens (with 6 decimals)
+// export const MIN_STAKE_DURATION_TO_PROPOSE = 30 * 24 * 60 * 60; // 30 days in seconds
+// export const PROPOSAL_DEPOSIT_AMOUNT = 1_000_000_000; // 1,000 ZSNIPE tokens (with 6 decimals)
+
+// TEMPORARY TEST VALUES - Change back for production!
+export const MIN_STAKE_TO_PROPOSE = 100_000_000; // 100 ZSNIPE (was 10,000)
+export const MIN_STAKE_DURATION_TO_PROPOSE = 1 * 24 * 60 * 60; // 1 day (was 30)
+export const PROPOSAL_DEPOSIT_AMOUNT = 100_000_000; // 100 ZSNIPE (was 1,000)
 
 // Helper functions for PDA derivation
 export function getStakingPoolPda(programId: PublicKey): [PublicKey, number] {
@@ -118,6 +131,25 @@ export function getEscrowTokenAccountPda(programId: PublicKey, stakingPool: Publ
 export function getGovernancePda(programId: PublicKey, userPublicKey: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from(GOVERNANCE_SEED), userPublicKey.toBuffer()],
+    programId
+  );
+}
+
+// Helper function to get proposal PDA
+export function getProposalPda(programId: PublicKey, proposalId: number): [PublicKey, number] {
+  const proposalIdBuffer = Buffer.alloc(8);
+  proposalIdBuffer.writeBigUInt64LE(BigInt(proposalId));
+  
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(PROPOSAL_SEED), proposalIdBuffer],
+    programId
+  );
+}
+
+// Helper function to get proposal escrow PDA
+export function getProposalEscrowPda(programId: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(PROPOSAL_ESCROW_SEED)],
     programId
   );
 }
@@ -838,5 +870,297 @@ export async function bulkInitGovernanceAccounts(walletNumbers?: number[]) {
     success: true,
     operation: 'bulk_init_governance',
     results: results,
+  };
+}
+
+// === Initialize Proposal Escrow (One-time setup) ===
+export async function initializeProposalEscrow() {
+  const { program, adminKeypair } = getProgram();
+
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [programAuthority] = getProgramAuthorityPda(program.programId);
+  const [proposalEscrow] = getProposalEscrowPda(program.programId);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  console.log("Initializing proposal escrow account...");
+  console.log(`Proposal Escrow PDA: ${proposalEscrow.toString()}`);
+  console.log(`Program Authority: ${programAuthority.toString()}`);
+
+  try {
+    const tx = await program.methods
+      .initializeProposalEscrow()
+      .accounts({
+        admin: adminKeypair.publicKey,
+        stakingPool: stakingPool,
+        programAuthority: programAuthority,
+        proposalEscrow: proposalEscrow,
+        tokenMint: tokenMintAddress,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+      })
+      .signers([adminKeypair])
+      .rpc();
+
+    console.log("✅ Proposal escrow initialized successfully!");
+    console.log(`Transaction: ${tx}`);
+
+    return {
+      success: true,
+      transactionId: tx,
+      proposalEscrow: proposalEscrow,
+      programAuthority: programAuthority,
+    };
+  } catch (error) {
+    console.error("Error initializing proposal escrow:", error);
+    throw error;
+  }
+}
+
+// === Create Proposal ===
+export async function createProposal(
+  proposalId: number,
+  title: string,
+  description: string,
+  proposalType: number, // 0=Text, 1=TreasuryTransfer, 2=ParameterUpdate
+  executionData: number[], // Array of bytes
+  votingPeriod: number, // 3, 7, or 14 days
+  userKeypair?: Keypair
+) {
+  const { program, connection, adminKeypair } = getProgram();
+  const proposer = userKeypair || adminKeypair;
+
+  console.log(`Creating proposal #${proposalId} by ${proposer.publicKey.toString()}`);
+
+  // Get all required PDAs
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [programAuthority] = getProgramAuthorityPda(program.programId);
+  const [proposerStakingAccount] = getUserStakePda(program.programId, proposer.publicKey);
+  const [proposerGovernanceAccount] = getGovernancePda(program.programId, proposer.publicKey);
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+  const [depositEscrowAccount] = getProposalEscrowPda(program.programId);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  // Get proposer's token account
+  const proposerTokenAccount = getAssociatedTokenAddressSync(
+    tokenMintAddress,
+    proposer.publicKey,
+    false,
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  // Validate proposer meets requirements
+  try {
+    const stakingInfo = await program.account.userStakingAccount.fetch(proposerStakingAccount) as UserStakingAccount;
+    const stakedAmount = stakingInfo.stakedAmount.toNumber();
+    const stakeDuration = Math.floor(Date.now() / 1000) - stakingInfo.timestamp.toNumber();
+
+    console.log(`Proposer staked amount: ${stakedAmount / 1_000_000} ZSNIPE`);
+    console.log(`Stake duration: ${Math.floor(stakeDuration / 86400)} days`);
+
+    if (stakedAmount < MIN_STAKE_TO_PROPOSE) {
+      throw new Error(
+        `Insufficient stake. Need ${MIN_STAKE_TO_PROPOSE / 1_000_000} ZSNIPE, have ${stakedAmount / 1_000_000}`
+      );
+    }
+
+    if (stakeDuration < MIN_STAKE_DURATION_TO_PROPOSE) {
+      throw new Error(
+        `Insufficient stake duration. Need 30 days, have ${Math.floor(stakeDuration / 86400)} days`
+      );
+    }
+  } catch (error: any) {
+    if (error.message.includes("Account does not exist")) {
+      throw new Error("User must stake tokens before creating proposals");
+    }
+    throw error;
+  }
+
+  // Check governance account exists
+  try {
+    await program.account.governanceAccount.fetch(proposerGovernanceAccount);
+  } catch (error) {
+    throw new Error("User must initialize governance account before creating proposals");
+  }
+
+  // Validate inputs
+  if (title.length > 100) {
+    throw new Error("Title too long (max 100 characters)");
+  }
+  if (description.length > 1000) {
+    throw new Error("Description too long (max 1000 characters)");
+  }
+  if (executionData.length > 500) {
+    throw new Error("Execution data too large (max 500 bytes)");
+  }
+  if (![3, 7, 14].includes(votingPeriod)) {
+    throw new Error("Voting period must be 3, 7, or 14 days");
+  }
+
+  console.log("All validations passed, creating proposal...");
+
+  try {
+    const tx = await program.methods
+      .createProposal(
+        new anchor.BN(proposalId),
+        title,
+        description,
+        { text: {} }, // ProposalType enum - adjust based on proposalType param
+        Buffer.from(executionData),
+        votingPeriod
+      )
+      .accounts({
+        proposer: proposer.publicKey,
+        proposerStakingAccount: proposerStakingAccount,
+        proposerGovernanceAccount: proposerGovernanceAccount,
+        proposalAccount: proposalAccount,
+        stakingPool: stakingPool,
+        programAuthority: programAuthority,
+        proposerTokenAccount: proposerTokenAccount,
+        depositEscrowAccount: depositEscrowAccount,
+        depositTokenMint: tokenMintAddress,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+      })
+      .signers([proposer])
+      .rpc();
+
+    console.log(`✅ Proposal #${proposalId} created successfully!`);
+    console.log(`Transaction: ${tx}`);
+
+    return {
+      success: true,
+      transactionId: tx,
+      proposalId: proposalId,
+      proposalAccount: proposalAccount,
+      title: title,
+      proposer: proposer.publicKey,
+    };
+  } catch (error) {
+    console.error("Error creating proposal:", error);
+    throw error;
+  }
+}
+
+export interface ProposalInfo {
+  proposalId: number;                // u64
+  proposer: string;                  // Pubkey as base58 string
+  title: string;                     // up to 100 chars
+  description: string;               // up to 500 chars
+  proposalType: any;                 // ProposalType (enum, type depends on IDL)
+  status: any;                       // ProposalStatus (enum, type depends on IDL)
+  executionData: number[];           // Vec<u8>
+  votingPeriodDays: number;          // u8
+  createdAt: number;                 // i64 (unix timestamp)
+  votingEndsAt: number;              // i64 (unix timestamp)
+  finalizedAt: number;               // i64 (unix timestamp)
+  executedAt: number;                // i64 (unix timestamp)
+  timelockEnd: number;               // i64 (unix timestamp)
+  yesVotes: number;                  // u64
+  noVotes: number;                   // u64
+  abstainVotes: number;              // u64
+  totalVoters: number;               // u32
+  depositAmount: number;             // u64 (in smallest unit, e.g. 1_000_000 = 1 ZSNIPE)
+  depositRefunded: boolean;          // bool
+  bump: number;                      // u8
+  reserved: number[];                // [u8; 32]
+  proposalAccount: string;           // PDA address as base58 string
+}
+
+// === Get Proposal Info ===
+export async function getProposalInfo(proposalId: number) {
+  const { program } = getProgram();
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+
+  try {
+    const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    
+    console.log(`=== Proposal #${proposalId} Information ===`);
+    console.log(`Title: ${proposalData.title}`);
+    console.log(`Description: ${proposalData.description}`);
+    console.log(`Proposer: ${proposalData.proposer.toString()}`);
+    console.log(`Status: ${JSON.stringify(proposalData.status)}`);
+    console.log(`Type: ${JSON.stringify(proposalData.proposalType)}`);
+    console.log(`Created: ${new Date(Number(proposalData.createdAt) * 1000)}`);
+    console.log(`Voting Ends: ${new Date(Number(proposalData.votingEndsAt) * 1000)}`);
+    console.log(`Voting Period: ${proposalData.votingPeriodDays} days`);
+    console.log(`Yes Votes: ${proposalData.yesVotes.toString()}`);
+    console.log(`No Votes: ${proposalData.noVotes.toString()}`);
+    console.log(`Abstain Votes: ${proposalData.abstainVotes.toString()}`);
+    console.log(`Total Voters: ${proposalData.totalVoters}`);
+    console.log(`Deposit: ${proposalData.depositAmount / 1_000_000} ZSNIPE`);
+    console.log(`Deposit Refunded: ${proposalData.depositRefunded}`);
+
+    return {
+      success: true,
+      proposalId: proposalData.proposalId,
+      title: proposalData.title,
+      description: proposalData.description,
+      proposer: proposalData.proposer.toString(),
+      proposalType: proposalData.proposalType,
+      status: proposalData.status,
+      votingPeriodDays: proposalData.votingPeriodDays,
+      createdAt: Number(proposalData.createdAt),
+      votingEndsAt: Number(proposalData.votingEndsAt),
+      finalizedAt: Number(proposalData.finalizedAt),
+      executedAt: Number(proposalData.executedAt),
+      timelockEnd: Number(proposalData.timelockEnd),
+      votes: {
+        yes: Number(proposalData.yesVotes),
+        no: Number(proposalData.noVotes),
+        abstain: Number(proposalData.abstainVotes),
+      },
+      totalVoters: proposalData.totalVoters,
+      depositAmount: Number(proposalData.depositAmount) / 1_000_000,
+      depositRefunded: proposalData.depositRefunded,
+      proposalAccount: proposalAccount.toString(),
+    };
+  } catch (error) {
+    console.error(`Error fetching proposal #${proposalId}:`, error);
+    throw error;
+  }
+}
+
+// === List All Proposals (helper function) ===
+export async function getAllProposals(maxProposalId: number = 10) {
+  const { program } = getProgram();
+  const proposals = [];
+
+  console.log(`Fetching proposals 0-${maxProposalId}...`);
+
+  for (let i = 0; i <= maxProposalId; i++) {
+    try {
+      const [proposalAccount] = getProposalPda(program.programId, i);
+      const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+      
+      proposals.push({
+        proposalId: i,
+        title: proposalData.title,
+        proposer: proposalData.proposer.toString(),
+        status: proposalData.status,
+        votingEndsAt: Number(proposalData.votingEndsAt),
+        totalVotes: Number(proposalData.yesVotes) + 
+                    Number(proposalData.noVotes) + 
+                    Number(proposalData.abstainVotes),
+      });
+    } catch (error) {
+      // Proposal doesn't exist, skip
+      continue;
+    }
+  }
+
+  return {
+    success: true,
+    count: proposals.length,
+    proposals,
   };
 }

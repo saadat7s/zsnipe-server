@@ -15,8 +15,15 @@ import {
   getMockWalletKeypair,
   getAllWalletsStatus,
   bulkStakeTokens,
-  bulkInitGovernanceAccounts
-} from '../services';
+  bulkInitGovernanceAccounts,
+  initializeProposalEscrow,
+  createProposal,
+  MIN_STAKE_TO_PROPOSE,
+  MIN_STAKE_DURATION_TO_PROPOSE,
+  PROPOSAL_DEPOSIT_AMOUNT,
+  getAllProposals,
+  getProposalInfo
+} from '../services/staking/services';
 
 export async function initStakingPool(req: Request, res: Response) {
   try {
@@ -290,5 +297,173 @@ export async function bulkInitGovernance(req: Request, res: Response) {
     res.status(200).json(result);
   } catch (error: any) {
     res.status(500).json({ success: false, error: error?.message || 'Bulk governance init failed' });
+  }
+}
+
+// Proposal Escrow controller
+export async function initProposalEscrow(req: Request, res: Response) {
+  try {
+    const result = await initializeProposalEscrow();
+    res.status(200).json(result);
+  } catch (error: any) {
+    res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Proposal escrow initialization failed' 
+    });
+  }
+}
+
+// Create Proposal controller
+export async function submitProposal(req: Request, res: Response) {
+  try {
+    const {
+      proposalId,
+      title,
+      description,
+      proposalType = 0, // Default to Text proposal
+      executionData = [],
+      votingPeriod = 7, // Default to 7 days
+      walletNumber
+    } = req.body;
+
+    // Validation
+    if (!proposalId || typeof proposalId !== 'number') {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Valid proposalId (number) is required' 
+      });
+    }
+
+    if (!title || typeof title !== 'string' || title.trim().length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Valid title (non-empty string) is required' 
+      });
+    }
+
+    if (!description || typeof description !== 'string') {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Valid description (string) is required' 
+      });
+    }
+
+    // Get user keypair
+    let userKeypair = undefined;
+    const walletNum = Number(walletNumber) || null;
+    if (walletNum && walletNum >= 1 && walletNum <= 10) {
+      userKeypair = getMockWalletKeypair(walletNum);
+    }
+
+    const result = await createProposal(
+      proposalId,
+      title.trim(),
+      description.trim(),
+      proposalType,
+      executionData,
+      votingPeriod,
+      userKeypair
+    );
+
+    res.status(200).json({
+      ...result,
+      walletNumber: walletNum || 'admin',
+      requirements: {
+        minStake: `${MIN_STAKE_TO_PROPOSE / 1_000_000} ZSNIPE`,
+        minStakeDuration: '30 days',
+        depositRequired: `${PROPOSAL_DEPOSIT_AMOUNT / 1_000_000} ZSNIPE`
+      }
+    });
+  } catch (error: any) {
+    console.error("Create proposal controller error:", error);
+    res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Proposal creation failed' 
+    });
+  }
+}
+
+// Get Proposal Requirements (helper endpoint)
+export async function getProposalRequirements(req: Request, res: Response) {
+  try {
+    const walletNumber = Number(req.query.walletNumber) || null;
+    
+    let userKeypair = undefined;
+    if (walletNumber && walletNumber >= 1 && walletNumber <= 10) {
+      userKeypair = getMockWalletKeypair(walletNumber);
+    }
+
+    // Check if user meets requirements
+    const eligibility = await checkVotingEligibility(userKeypair);
+    const stakingInfo = await getUserStakingInfo(userKeypair);
+
+    const meetsStakeAmount = stakingInfo 
+      ? stakingInfo.stakedAmount.toNumber() >= MIN_STAKE_TO_PROPOSE 
+      : false;
+
+    const meetsStakeDuration = eligibility.isEligible && 
+      eligibility.stakeDurationDays && eligibility.stakeDurationDays >= 30;
+
+    res.status(200).json({
+      success: true,
+      requirements: {
+        minStakeAmount: MIN_STAKE_TO_PROPOSE / 1_000_000,
+        minStakeDuration: 30,
+        depositAmount: PROPOSAL_DEPOSIT_AMOUNT / 1_000_000,
+        validVotingPeriods: [3, 7, 14],
+        maxTitleLength: 100,
+        maxDescriptionLength: 1000,
+        maxExecutionDataLength: 500,
+      },
+      userStatus: {
+        walletNumber: walletNumber || 'admin',
+        currentStake: stakingInfo ? stakingInfo.stakedAmount.toNumber() / 1_000_000 : 0,
+        stakeDuration: eligibility.stakeDurationDays || 0,
+        meetsStakeAmount,
+        meetsStakeDuration,
+        canCreateProposal: meetsStakeAmount && meetsStakeDuration,
+      }
+    });
+  } catch (error: any) {
+    res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Failed to fetch requirements' 
+    });
+  }
+}
+
+// Get single proposal
+export async function getProposal(req: Request, res: Response) {
+  try {
+    const proposalId = Number(req.params.proposalId);
+    
+    if (!Number.isFinite(proposalId) || proposalId < 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Valid proposalId is required' 
+      });
+    }
+
+    const result = await getProposalInfo(proposalId);
+    res.status(200).json(result);
+  } catch (error: any) {
+    res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Failed to fetch proposal' 
+    });
+  }
+}
+
+// List all proposals
+export async function listProposals(req: Request, res: Response) {
+  try {
+    const maxId = Number(req.query.maxId) || 100;
+    const result = await getAllProposals(maxId);
+    res.status(200).json(result);
+  } catch (error: any) {
+    res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Failed to list proposals' 
+    });
   }
 }

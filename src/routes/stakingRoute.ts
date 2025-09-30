@@ -14,7 +14,12 @@ import {
   governanceSummary,
   getAllWallets,
   bulkStake,
-  bulkInitGovernance
+  bulkInitGovernance,
+  getProposalRequirements,
+  initProposalEscrow,
+  submitProposal,
+  getProposal,
+  listProposals
 } from '../controllers/stakingController';
 
 const router = Router();
@@ -39,5 +44,13 @@ router.get('/governance/summary', governanceSummary);
 router.get('/wallets/all', getAllWallets);
 router.post('/wallets/bulk-stake', bulkStake);
 router.post('/wallets/bulk-init-governance', bulkInitGovernance);
+
+// Proposal routes
+router.post('/proposals/init-escrow', initProposalEscrow);
+router.post('/proposals/create', submitProposal);
+router.get('/proposals/requirements', getProposalRequirements);
+router.get('/proposals/list', listProposals);
+router.get('/proposals/:proposalId', getProposal);
+
 
 export default router;
