@@ -19,7 +19,10 @@ import {
   initProposalEscrow,
   submitProposal,
   getProposal,
-  listProposals
+  listProposals,
+  bulkVote,
+  getVote,
+  submitVote
 } from '../controllers/stakingController';
 
 const router = Router();
@@ -36,7 +39,7 @@ router.post('/unstake-tokens', unstake);
 router.post('/governance/init', initGovernanceAccount);
 router.post('/governance/compute-voting-power', computeVotingPower);
 router.get('/governance/preview-voting-power', previewVotingPower);
-router.get('/governance/eligibility', eligibility);
+router.get('/governance/eligibilit  y', eligibility);
 router.get('/governance/info', governanceInfo);
 router.get('/governance/summary', governanceSummary);
 
@@ -51,6 +54,12 @@ router.post('/proposals/create', submitProposal);
 router.get('/proposals/requirements', getProposalRequirements);
 router.get('/proposals/list', listProposals);
 router.get('/proposals/:proposalId', getProposal);
+
+// Vote routes
+router.post('/votes/cast', submitVote);
+router.get('/votes/:proposalId', getVote);
+router.post('/votes/bulk-cast', bulkVote);
+
 
 
 export default router;

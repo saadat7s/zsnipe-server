@@ -22,8 +22,13 @@ import {
   MIN_STAKE_DURATION_TO_PROPOSE,
   PROPOSAL_DEPOSIT_AMOUNT,
   getAllProposals,
-  getProposalInfo
+  getProposalInfo,
+  bulkCastVote,
+  castVote,
+  getVoteRecord,
+
 } from '../services/staking/services';
+import { VoteChoice } from '../services/types';
 
 export async function initStakingPool(req: Request, res: Response) {
   try {
@@ -464,6 +469,133 @@ export async function listProposals(req: Request, res: Response) {
     res.status(500).json({ 
       success: false, 
       error: error?.message || 'Failed to list proposals' 
+    });
+  }
+}
+
+
+
+export async function submitVote(req: Request, res: Response) {
+
+  try {
+    const { proposalId, voteChoice, walletNumber } = req.body;
+
+        // Validation
+        if (!proposalId || typeof proposalId !== 'number') {
+          return res.status(400).json({ 
+            success: false, 
+            error: 'Valid proposalId (number) is required' 
+          });
+        }
+        
+    if (voteChoice === undefined || voteChoice === null) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'voteChoice is required (0=Yes, 1=No, 2=Abstain)' 
+      });
+    }
+
+        // Validate vote choice
+        const voteChoiceNum = Number(voteChoice);
+        if (![0, 1, 2].includes(voteChoiceNum)) {
+          return res.status(400).json({ 
+            success: false, 
+            error: 'Invalid voteChoice. Must be 0 (Yes), 1 (No), or 2 (Abstain)' 
+          });
+        }
+       // Get user keypair
+       let userKeypair = undefined;
+       const walletNum = Number(walletNumber) || null;
+       if (walletNum && walletNum >= 1 && walletNum <= 10) {
+         userKeypair = getMockWalletKeypair(walletNum);
+       }
+
+       const result = await castVote(proposalId, voteChoiceNum as VoteChoice, userKeypair);
+       res.status(200).json({
+        ...result,
+        walletNumber: walletNum || 'admin',
+      });
+    } catch (error: any) {
+      console.error("Cast vote controller error:", error);
+      res.status(500).json({ 
+        success: false, 
+        error: error?.message || 'Vote casting failed' 
+      });
+    }
+  }
+
+// Get Vote Record controller
+export async function getVote(req: Request, res: Response) {
+  try {
+    const proposalId = Number(req.params.proposalId);
+    const walletNumber = Number(req.query.walletNumber) || null;
+
+    if (!Number.isFinite(proposalId) || proposalId < 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Valid proposalId is required' 
+      });
+    }
+
+    let userKeypair = undefined;
+    if (walletNumber && walletNumber >= 1 && walletNumber <= 10) {
+      userKeypair = getMockWalletKeypair(walletNumber);
+    }
+
+    const result = await getVoteRecord(proposalId, userKeypair);
+    res.status(200).json({
+      ...result,
+      walletNumber: walletNumber || 'admin'
+    });
+  } catch (error: any) {
+    res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Failed to fetch vote record' 
+    });
+  }
+}
+
+// Bulk Cast Votes controller (for testing)
+export async function bulkVote(req: Request, res: Response) {
+  try {
+    const { proposalId, voteChoice, walletNumbers } = req.body;
+
+    if (!proposalId || typeof proposalId !== 'number') {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Valid proposalId (number) is required' 
+      });
+    }
+
+    const voteChoiceNum = Number(voteChoice);
+    if (![0, 1, 2].includes(voteChoiceNum)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Invalid voteChoice. Must be 0 (Yes), 1 (No), or 2 (Abstain)' 
+      });
+    }
+
+    const targetWallets = walletNumbers || [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    
+    if (!Array.isArray(targetWallets)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'walletNumbers must be an array' 
+      });
+    }
+
+    const result = await bulkCastVote(
+      proposalId, 
+      voteChoiceNum as VoteChoice, 
+      targetWallets
+    );
+
+    res.status(200).json(result);
+  } catch (error: any) {
+    console.error("Bulk vote controller error:", error);
+    res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Bulk vote casting failed' 
     });
   }
 }

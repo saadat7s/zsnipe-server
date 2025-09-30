@@ -17,7 +17,7 @@ import {
   getAssociatedTokenAddressSync 
 } from "@solana/spl-token";
 
-import { StakingPool, UserStakingAccount } from "../types";
+import { StakingPool, UserStakingAccount, GovernanceAccount, VoteRecord, VoteChoice } from "../types";
 
 // Helper function to get the program
 export const getProgram = () => {
@@ -30,7 +30,7 @@ export const getProgram = () => {
   const connection = new Connection("https://api.devnet.solana.com", "confirmed");
 
   const programId = new PublicKey(
-    "629dBzrHwL12uJS1nN8VyomiWgRTtVWqdmSUJLcpxjyu"
+    "758R2jFfces6Ue5B9rLmRrh8NesiU9dCtDa4bUSBpCMt"
   );
 
   const provider = new anchor.AnchorProvider(
@@ -77,18 +77,20 @@ export const getAllMockWallets = () => {
 };
 
 // Seeds from smart contract
-const STAKING_POOL_SEED = "staking_poolV2";
-const PROGRAM_AUTHORITY_SEED = "program_authority";
-const USER_STAKE_SEED = "user_stake";
-const ESCROW_SEED = "escrow";
-const GOVERNANCE_SEED = "governance";
+const STAKING_POOL_SEED = "staking_poolV3";
+const PROGRAM_AUTHORITY_SEED = "program_authorityV1";
+const USER_STAKE_SEED = "user_stakeV1";
+const ESCROW_SEED = "escrowV1";
+const GOVERNANCE_SEED = "governanceV1";
 
 
-const PROPOSAL_SEED = "proposal";
-const PROPOSAL_ESCROW_SEED = "proposal_escrow";
+const PROPOSAL_SEED = "proposalV1";
+const PROPOSAL_ESCROW_SEED = "proposal_escrowV1";
+
+const VOTE_SEED = "voteV1";
 
 // // Governance constants
-const MIN_STAKE_DURATION_FOR_VOTING = 30 * 24 * 60 * 60; // 30 days in seconds
+const MIN_STAKE_DURATION_FOR_VOTING = 1 * 86400; // 30 days in seconds
 // // Proposal configuration constants
 // export const MIN_STAKE_TO_PROPOSE = 10_000_000_000; // 10,000 ZSNIPE tokens (with 6 decimals)
 // export const MIN_STAKE_DURATION_TO_PROPOSE = 30 * 24 * 60 * 60; // 30 days in seconds
@@ -96,7 +98,7 @@ const MIN_STAKE_DURATION_FOR_VOTING = 30 * 24 * 60 * 60; // 30 days in seconds
 
 // TEMPORARY TEST VALUES - Change back for production!
 export const MIN_STAKE_TO_PROPOSE = 100_000_000; // 100 ZSNIPE (was 10,000)
-export const MIN_STAKE_DURATION_TO_PROPOSE = 1 * 24 * 60 * 60; // 1 day (was 30)
+export const MIN_STAKE_DURATION_TO_PROPOSE = 1 * 86400; // 1 day (was 30)
 export const PROPOSAL_DEPOSIT_AMOUNT = 100_000_000; // 100 ZSNIPE (was 1,000)
 
 // Helper functions for PDA derivation
@@ -154,16 +156,21 @@ export function getProposalEscrowPda(programId: PublicKey): [PublicKey, number] 
   );
 }
 
-// Types for governance accounts
-export interface GovernanceAccount {
-  staker: PublicKey;
-  participationCount: number;
-  lastVoteTimestamp: anchor.BN;
-  stakeLockEnd: anchor.BN;
-  votingPowerCache: anchor.BN;
-  createdAt: anchor.BN;
-  bump: number;
+export function getVoteRecordPda(
+  programId: PublicKey, 
+  proposalId: number, 
+  voterPublicKey: PublicKey
+): [PublicKey, number] {
+  const proposalIdBuffer = Buffer.alloc(8);
+  proposalIdBuffer.writeBigUInt64LE(BigInt(proposalId));
+  
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(VOTE_SEED), proposalIdBuffer, voterPublicKey.toBuffer()],
+    programId
+  );
 }
+
+
 
 // === Initialize Staking Pool ===
 export async function initializeStakingPool() {
@@ -178,6 +185,7 @@ export async function initializeStakingPool() {
     throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
   }
   const tokenMintAddress = new PublicKey(tokenMint);
+  
   
   console.log("Initializing staking pool...");
   console.log(`Staking Pool PDA: ${stakingPool.toString()}`);
@@ -670,7 +678,14 @@ export async function getUserStakingInfo(userKeypair?: Keypair) {
     console.log(`Staked At: ${new Date(stakingInfo.timestamp.toNumber() * 1000)}`);
     console.log(`Last Updated: ${new Date(stakingInfo.lastUpdated.toNumber() * 1000)}`);
 
-    return stakingInfo;
+    // Return properly serialized data
+    return {
+      staker: stakingInfo.staker.toString(),
+      stakedAmount: stakingInfo.stakedAmount.toNumber(),
+      timestamp: stakingInfo.timestamp.toNumber(),
+      lastUpdated: stakingInfo.lastUpdated.toNumber(),
+      bump: stakingInfo.bump,
+    };
   } catch (error) {
     console.error("Error fetching user staking info:", error);
     console.error("User might not have staked yet or account doesn't exist");
@@ -1162,5 +1177,234 @@ export async function getAllProposals(maxProposalId: number = 10) {
     success: true,
     count: proposals.length,
     proposals,
+  };
+}
+
+// === Cast Vote ===
+export async function castVote(
+  proposalId: number,
+  voteChoice: VoteChoice,
+  userKeypair?: Keypair
+) {
+
+  const { program, adminKeypair } = getProgram();
+  const voter = userKeypair || adminKeypair;
+
+  console.log(`Casting vote on proposal #${proposalId} by ${voter.publicKey.toString()}`);
+  console.log(`Vote choice: ${VoteChoice[voteChoice]}`);
+
+    // Get all required PDAs
+    const [userStakingAccount] = getUserStakePda(program.programId, voter.publicKey);
+    const [governanceAccount] = getGovernancePda(program.programId, voter.publicKey);
+    const [proposalAccount] = getProposalPda(program.programId, proposalId);
+    const [voteRecord] = getVoteRecordPda(program.programId, proposalId, voter.publicKey);
+
+      // Pre-flight checks
+  try {
+    // Check if user has staked
+    const stakingInfo = await program.account.userStakingAccount.fetch(userStakingAccount) as UserStakingAccount;
+    const stakeDuration = Math.floor(Date.now() / 1000) - stakingInfo.timestamp.toNumber();
+    const stakeDurationDays = Math.floor(stakeDuration / 86400);
+
+    console.log(`Stake duration: ${stakeDurationDays} days`);
+
+    if (stakeDuration < 1 * 86400) { // Using test value of 1 day
+      throw new Error(`Insufficient stake duration. Need 1 day, have ${stakeDurationDays} days`);
+    }
+  } catch (error: any) {
+    if (error.message.includes("Account does not exist")) {
+      throw new Error("User must stake tokens before voting");
+    }
+    throw error;
+  }
+
+    // Check if governance account exists and has voting power
+    try {
+      const govAccount = await program.account.governanceAccount.fetch(governanceAccount) as GovernanceAccount;
+      
+      if (govAccount.votingPowerCache.toNumber() === 0) {
+        throw new Error("Voting power not calculated. Call calculate_voting_power first");
+      }
+  
+      console.log(`Voting power: ${govAccount.votingPowerCache.toString()}`);
+    } catch (error: any) {
+      if (error.message.includes("Account does not exist")) {
+        throw new Error("Governance account not initialized. Initialize governance account first");
+      }
+      throw error;
+    }
+
+      // Check if proposal exists and is active
+  try {
+    const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    const status = Object.keys(proposalData.status)[0];
+    
+    if (status !== 'active') {
+      throw new Error(`Proposal is not active. Current status: ${status}`);
+    }
+
+    const currentTime = Math.floor(Date.now() / 1000);
+    if (currentTime >= proposalData.votingEndsAt) {
+      throw new Error("Voting period has ended");
+    }
+
+    console.log(`Proposal status: Active`);
+    console.log(`Voting ends at: ${new Date(proposalData.votingEndsAt * 1000)}`);
+  } catch (error: any) {
+    if (error.message.includes("Account does not exist")) {
+      throw new Error(`Proposal #${proposalId} does not exist`);
+    }
+    throw error;
+  }
+
+    // Check if user already voted
+    try {
+      await program.account.voteRecord.fetch(voteRecord) as VoteRecord;
+      throw new Error("You have already voted on this proposal. Vote changes are not allowed.");
+    } catch (error: any) {
+      if (!error.message.includes("Account does not exist")) {
+        // If it's not "account doesn't exist", it means they already voted
+        throw error;
+      }
+      // If account doesn't exist, that's good - user hasn't voted yet
+    }
+
+      // Convert VoteChoice enum to the format expected by Anchor
+  let voteChoiceAnchor: any;
+  switch (voteChoice) {
+    case VoteChoice.Yes:
+      voteChoiceAnchor = { yes: {} };
+      break;
+    case VoteChoice.No:
+      voteChoiceAnchor = { no: {} };
+      break;
+    case VoteChoice.Abstain:
+      voteChoiceAnchor = { abstain: {} };
+      break;
+    default:
+      throw new Error("Invalid vote choice");
+  }
+
+  console.log("All validations passed, casting vote...");
+
+  try {
+    const tx = await program.methods
+      .castVote(voteChoiceAnchor)
+      .accounts({
+        voter: voter.publicKey,
+        userStakingAccount: userStakingAccount,
+        governanceAccount: governanceAccount,
+        proposalAccount: proposalAccount,
+        voteRecord: voteRecord,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([voter])
+      .rpc();
+
+      console.log(`✅ Vote cast successfully!`);
+      console.log(`Transaction: ${tx}`);
+
+         // Fetch updated proposal to show vote counts
+    const updatedProposal = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+
+    return {
+      success: true,
+      transactionId: tx,
+      proposalId: proposalId,
+      voteChoice: VoteChoice[voteChoice],
+      voter: voter.publicKey.toString(),
+      voteRecord: voteRecord.toString(),
+      updatedVotes: {
+        yes: updatedProposal.yesVotes.toString(),
+        no: updatedProposal.noVotes.toString(),
+        abstain: updatedProposal.abstainVotes.toString(),
+        totalVoters: updatedProposal.totalVoters
+      }
+    };
+  } catch (error) {
+    console.error("Error casting vote:", error);
+    throw error;
+  }
+}
+
+export async function getVoteRecord(
+  proposalId: number,
+  userKeypair?: Keypair
+) {
+  const { program, adminKeypair } = getProgram();
+  const voter = userKeypair || adminKeypair;
+
+  const [voteRecord] = getVoteRecordPda(program.programId, proposalId, voter.publicKey);
+
+  try {
+    const voteData = await program.account.voteRecord.fetch(voteRecord) as VoteRecord;
+    
+    const voteChoice = Object.keys(voteData.voteChoice)[0];
+    
+    console.log(`=== Vote Record for Proposal #${proposalId} ===`);
+    console.log(`Voter: ${voteData.voter.toString()}`);
+    console.log(`Vote Choice: ${voteChoice}`);
+    console.log(`Voting Power Used: ${voteData.votingPower.toString()}`);
+    console.log(`Voted At: ${new Date(voteData.votedAt.toNumber() * 1000)}`);
+    return {
+      success: true,
+      voteRecord: {
+        voter: voteData.voter.toString(),
+        proposalId: voteData.proposalId.toString(),
+        voteChoice: voteChoice,
+        votingPower: voteData.votingPower.toString(),
+        votedAt: voteData.votedAt.toNumber(),
+        votedAtDate: new Date(voteData.votedAt.toNumber() * 1000).toISOString(),
+      },
+      voteRecordAddress: voteRecord.toString(),
+    };
+  } catch (error: any) {
+    if (error.message && error.message.includes("Account does not exist")) {
+      return {
+        success: false,
+        message: "User has not voted on this proposal",
+        voter: voter.publicKey.toString(),
+        proposalId: proposalId,
+      };
+    }
+    console.error("Error fetching vote record:", error);
+    throw error;
+  }
+}
+
+export async function bulkCastVote(
+  proposalId: number,
+  voteChoice: VoteChoice,
+  walletNumbers?: number[]
+) {
+  const targetWallets = walletNumbers || [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+  const results = [];
+
+  console.log(`Bulk casting ${VoteChoice[voteChoice]} votes on proposal #${proposalId} for wallets: ${targetWallets.join(', ')}`);
+
+  for (const walletNum of targetWallets) {
+    try {
+      const wallet = getMockWalletKeypair(walletNum);
+      const result = await castVote(proposalId, voteChoice, wallet);
+      results.push({
+        walletNumber: walletNum,
+        success: true,
+        transactionId: result.transactionId,
+        voteChoice: VoteChoice[voteChoice],
+      });
+    } catch (error: any) {
+      results.push({
+        walletNumber: walletNum,
+        success: false,
+        error: error.message,
+      });
+    }
+  }
+  return {
+    success: true,
+    operation: 'bulk_cast_vote',
+    proposalId: proposalId,
+    voteChoice: VoteChoice[voteChoice],
+    results: results,
   };
 }
