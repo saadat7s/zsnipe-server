@@ -6,6 +6,84 @@ use anchor_spl::{
 
 declare_id!("629dBzrHwL12uJS1nN8VyomiWgRTtVWqdmSUJLcpxjyu");
 
+// Proposal creation requirements
+// pub const MIN_STAKE_TO_PROPOSE: u64 = 10_000_000_000;
+// pub const MAX_STAKE_DURATION_TO_PROPOSE: i64 = 30 * 86400;
+pub const PROPOSAL_DEPOSIT_AMOUNT: u64 = 100_000_000;
+pub const MAX_ACTIVE_PROPOSALS: u8 = 3;
+//change these for testing:
+pub const MIN_STAKE_TO_PROPOSE: u64 = 100_000_000; // 100 ZSNIPE (instead of 10,000)
+pub const MAX_STAKE_DURATION_TO_PROPOSE: i64 = 1 * 86400; // 1 day (instead of 30)
+
+// String length limits
+pub const MAX_TITLE_LENGTH: usize = 100;
+pub const MAX_DESCRIPTION_LENGTH: usize = 1000;
+pub const MAX_EXECUTION_DATA_LENGTH: usize = 500;
+
+// Voting configuration parameters
+pub const VOTING_PERIOD_3_DAYS: u8 = 3;
+pub const VOTING_PERIOD_7_DAYS: u8 = 7;
+pub const VOTING_PERIOD_14_DAYS: u8 = 14;
+pub const VALID_VOTING_PERIODS: [u8; 3] = [
+    VOTING_PERIOD_3_DAYS,
+    VOTING_PERIOD_7_DAYS,
+    VOTING_PERIOD_14_DAYS,
+];
+
+// Seeds
+pub const PROPOSAL_SEED: &[u8] = b"proposal";
+pub const VOTE_SEED: &[u8] = b"vote";
+pub const GOVERNANCE_CONFIG_SEED: &[u8] = b"governance_config";
+
+// Governance Enums
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ProposalType {
+    /// Text-only proposal for signaling/discussion
+    Text = 0,
+
+    /// Transfer tokens from treasury to recipient
+    TreasuryTransfer = 1,
+
+    /// Update governance parameters
+    ParameterUpdate = 2,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ProposalStatus {
+    /// Proposal is currently accepting votes
+    Active = 0,
+
+    /// Voting ended, proposal passed, waiting for timelock
+    Passed = 1,
+
+    /// Voting ended, proposal failed (quorum not met or threshold not reached)
+    Failed = 2,
+
+    /// Proposal was executed successfully
+    Executed = 3,
+
+    /// Proposal was cancelled before/during voting
+    Cancelled = 4,
+
+    /// Proposal passed but execution failed
+    ExecutionFailed = 5,
+
+    /// Proposal cancelled by admin during timelock (emergency)
+    EmergencyCancelled = 6,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum VoteChoice {
+    /// Vote in favor of the proposal
+    Yes = 0,
+
+    /// Vote against the proposal
+    No = 1,
+
+    /// Participate without taking a stance (counts for quorum only)
+    Abstain = 2,
+}
+
 #[program]
 pub mod zero_sided_snipe {
     use super::*;
@@ -172,6 +250,128 @@ pub mod zero_sided_snipe {
 
         Ok(voting_power)
     }
+
+    /// Initialize the proposal escrow account (one-time setup)
+    /// This holds all proposal deposits
+    pub fn initialize_proposal_escrow(ctx: Context<InitializeProposalEscrow>) -> Result<()> {
+        msg!("✅ Proposal escrow account initialized");
+        msg!(
+            "🔐 Escrow address: {}",
+            ctx.accounts.proposal_escrow.key()
+        );
+        Ok(())
+    }
+
+    pub fn create_proposal(
+        ctx: Context<CreateProposal>,
+        proposal_id: u64, // Changed to u64 to match PDA derivation
+        title: String,
+        description: String,
+        proposal_type: ProposalType,
+        execution_data: Vec<u8>,
+        voting_period: u8,
+    ) -> Result<()> {
+        let proposer_staking = &ctx.accounts.proposer_staking_account;
+        let proposal = &mut ctx.accounts.proposal_account;
+        let clock = Clock::get()?;
+
+        // ===== VALIDATION 1: Stake Amount =====
+        require!(
+            proposer_staking.staked_amount >= MIN_STAKE_TO_PROPOSE,
+            ErrorCode::InsufficientStakeToPropose
+        );
+
+        // ===== VALIDATION 2: Stake Duration =====
+        let stake_duration = clock.unix_timestamp - proposer_staking.timestamp;
+        require!(
+            stake_duration >= MAX_STAKE_DURATION_TO_PROPOSE,
+            ErrorCode::InsufficientStakeDurationToPropose
+        );
+
+        // ===== VALIDATION 3: String Length Limits =====
+        require!(
+            title.len() <= MAX_TITLE_LENGTH,
+            ErrorCode::ProposalTitleTooLong
+        );
+
+        require!(
+            description.len() <= MAX_DESCRIPTION_LENGTH,
+            ErrorCode::ProposalDescriptionTooLong
+        );
+
+        // ===== VALIDATION 4: Execution Data Size =====
+        require!(
+            execution_data.len() <= MAX_EXECUTION_DATA_LENGTH,
+            ErrorCode::ExecutionDataTooLarge
+        );
+
+        // ===== VALIDATION 5: Voting Period =====
+        require!(
+            VALID_VOTING_PERIODS.contains(&voting_period),
+            ErrorCode::InvalidVotingPeriod
+        );
+
+        // ===== TRANSFER DEPOSIT FROM PROPOSER TO ESCROW =====
+        transfer_checked(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.proposer_token_account.to_account_info(),
+                    mint: ctx.accounts.deposit_token_mint.to_account_info(),
+                    to: ctx.accounts.deposit_escrow_account.to_account_info(),
+                    authority: ctx.accounts.proposer.to_account_info(),
+                },
+            ),
+            PROPOSAL_DEPOSIT_AMOUNT,
+            ctx.accounts.deposit_token_mint.decimals,
+        )?;
+
+        // ===== CALCULATE VOTING END TIME =====
+        let voting_ends_at = clock
+            .unix_timestamp
+            .checked_add((voting_period as i64) * 86400)
+            .ok_or(ErrorCode::InvalidAmount)?;
+
+        // ===== INITIALIZE PROPOSAL ACCOUNT =====
+        proposal.proposal_id = proposal_id;
+        proposal.proposer = ctx.accounts.proposer.key();
+        proposal.title = title.clone();
+        proposal.description = description;
+        proposal.proposal_type = proposal_type;
+        proposal.status = ProposalStatus::Active;
+        proposal.execution_data = execution_data;
+        proposal.voting_period_days = voting_period;
+        proposal.created_at = clock.unix_timestamp;
+        proposal.voting_ends_at = voting_ends_at;
+        proposal.finalized_at = 0;
+        proposal.executed_at = 0;
+        proposal.timelock_end = 0;
+        proposal.yes_votes = 0;
+        proposal.no_votes = 0;
+        proposal.abstain_votes = 0;
+        proposal.total_voters = 0;
+        proposal.deposit_amount = PROPOSAL_DEPOSIT_AMOUNT;
+        proposal.deposit_refunded = false;
+        proposal.bump = ctx.bumps.proposal_account;
+        proposal.reserved = [0; 32];
+
+        // ===== LOG SUCCESS =====
+        msg!(
+            "✅ Proposal #{} created by {}",
+            proposal_id,
+            ctx.accounts.proposer.key()
+        );
+        msg!("📋 Title: {}", title);
+        msg!("🗳️  Type: {:?}", proposal.proposal_type);
+        msg!("⏰ Voting ends at: {} (Unix timestamp)", voting_ends_at);
+        msg!(
+            "💰 Deposit: {} ZSNIPE",
+            PROPOSAL_DEPOSIT_AMOUNT / 1_000_000
+        );
+
+        Ok(())
+    }
+
 }
 
 // Hybrid voting power calculation function
@@ -236,6 +436,32 @@ pub struct GovernanceAccount {
     pub bump: u8,                 // 1 byte
 }
 // Total: 69 bytes (only exists when user participates in governance)
+
+// Individual Proposal Account
+#[account]
+pub struct ProposalAccount {
+    pub proposal_id: u64,            // 8 bytes
+    pub proposer: Pubkey,            // 32 bytes
+    pub title: String,               // 4 + 100 = 104 bytes
+    pub description: String,         // 4 + 500 = 504 bytes (optimized)
+    pub proposal_type: ProposalType, // 1 byte
+    pub status: ProposalStatus,      // 1 byte
+    pub execution_data: Vec<u8>,     // 4 + 300 = 304 bytes (optimized)
+    pub voting_period_days: u8,      // 1 byte
+    pub created_at: i64,             // 8 bytes
+    pub voting_ends_at: i64,         // 8 bytes
+    pub finalized_at: i64,           // 8 bytes
+    pub executed_at: i64,            // 8 bytes
+    pub timelock_end: i64,           // 8 bytes
+    pub yes_votes: u64,              // 8 bytes
+    pub no_votes: u64,               // 8 bytes
+    pub abstain_votes: u64,          // 8 bytes
+    pub total_voters: u32,           // 4 bytes
+    pub deposit_amount: u64,         // 8 bytes
+    pub deposit_refunded: bool,      // 1 byte
+    pub bump: u8,                    // 1 byte
+    pub reserved: [u8; 32],          // 32 bytes
+}
 
 // === ACCOUNT CONTEXTS ===
 
@@ -428,6 +654,125 @@ pub struct CalculateVotingPower<'info> {
     pub governance_account: Account<'info, GovernanceAccount>,
 }
 
+#[derive(Accounts)]
+pub struct InitializeProposalEscrow<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    /// Staking pool (to get program authority)
+    #[account(
+        seeds = [b"staking_poolV2"],
+        bump = staking_pool.bump,
+    )]
+    pub staking_pool: Account<'info, StakingPool>,
+
+    /// Program authority (owns the escrow)
+    #[account(
+        seeds = [b"program_authority"],
+        bump = staking_pool.authority_bump
+    )]
+    /// CHECK: Program authority PDA
+    pub program_authority: UncheckedAccount<'info>,
+
+    /// Proposal escrow token account
+    #[account(
+        init,
+        payer = admin,
+        token::mint = token_mint,
+        token::authority = program_authority,
+        seeds = [b"proposal_escrow"],
+        bump
+    )]
+    pub proposal_escrow: InterfaceAccount<'info, TokenAccount>,
+
+    /// The token mint (ZSNIPE)
+    #[account(
+        constraint = token_mint.to_account_info().owner == &spl_token_2022::ID @ ErrorCode::InvalidTokenProgram
+    )]
+    pub token_mint: InterfaceAccount<'info, Mint>,
+
+    pub system_program: Program<'info, System>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+#[instruction(proposal_id: u64)]
+pub struct CreateProposal<'info> {
+    /// The proposer who is creating the proposal
+    #[account(mut)]
+    pub proposer: Signer<'info>,
+
+    /// The proposer's staking account (to verify stake amount and duration)
+    #[account(
+        seeds = [b"user_stake", proposer.key().as_ref()],
+        bump = proposer_staking_account.bump,
+        constraint = proposer_staking_account.staker == proposer.key() @ ErrorCode::UnauthorizedStaker,
+    )]
+    pub proposer_staking_account: Account<'info, UserStakingAccount>,
+
+    /// The proposer's governance account (to verify voting power is calculated)
+    #[account(
+        seeds = [b"governance", proposer.key().as_ref()],
+        bump = proposer_governance_account.bump,
+        constraint = proposer_governance_account.staker == proposer.key() @ ErrorCode::UnauthorizedStaker,
+    )]
+    pub proposer_governance_account: Account<'info, GovernanceAccount>,
+
+    /// The proposal account to create
+    #[account(
+        init,
+        payer = proposer,
+        space = 8 + 1057,  // discriminator + ProposalAccount size
+        seeds = [PROPOSAL_SEED, proposal_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub proposal_account: Account<'info, ProposalAccount>,
+
+    /// Staking pool (to access program authority for escrow)
+    #[account(
+        seeds = [b"staking_poolV2"],
+        bump = staking_pool.bump,
+    )]
+    pub staking_pool: Account<'info, StakingPool>,
+
+    /// Program authority (for signing deposit transfer to escrow)
+    #[account(
+        seeds = [b"program_authority"],
+        bump = staking_pool.authority_bump
+    )]
+    /// CHECK: Program authority PDA
+    pub program_authority: UncheckedAccount<'info>,
+
+    /// Proposer's token account (for deposit transfer)
+    #[account(
+        mut,
+        associated_token::mint = deposit_token_mint,
+        associated_token::authority = proposer,
+        associated_token::token_program = token_program,
+    )]
+    pub proposer_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    /// Deposit escrow account (holds proposal deposits)
+    #[account(
+        mut,
+        seeds = [b"proposal_escrow"],
+        bump,
+    )]
+    pub deposit_escrow_account: InterfaceAccount<'info, TokenAccount>,
+
+    /// The token mint (ZSNIPE)
+    #[account(
+        constraint = deposit_token_mint.to_account_info().owner == &spl_token_2022::ID @ ErrorCode::InvalidTokenProgram
+    )]
+    pub deposit_token_mint: InterfaceAccount<'info, Mint>,
+
+    /// System program
+    pub system_program: Program<'info, System>,
+
+    /// Token program (Token-2022)
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
 #[error_code]
 pub enum ErrorCode {
     #[msg("Stake amount below minimum requirement")]
@@ -465,4 +810,31 @@ pub enum ErrorCode {
 
     #[msg("Tokens are currently locked for governance participation")]
     TokensLockedForGovernance,
+
+    //Proposal creation error codes:
+    #[msg(
+        "Insufficient stake amount to create proposal - minimum 10,000 ZSNIPE tokens must be staked"
+    )]
+    InsufficientStakeToPropose,
+
+    #[msg("Insufficient stake duration to create proposal - minimum 30 days required")]
+    InsufficientStakeDurationToPropose,
+
+    #[msg("Insufficient deposit  - 1000 ZSNIPE tokens required to create a proposal")]
+    InsufficientDepositToPropose,
+
+    #[msg("Maximum Active proposals reached - You have 3 active proposals already")]
+    MaxActiveProposalsReached,
+
+    #[msg("Proposal title too longs - Max 100 Characters")]
+    ProposalTitleTooLong,
+
+    #[msg("Proposal description too long - max 1000 characters")]
+    ProposalDescriptionTooLong,
+
+    #[msg("Execution data too large - max 500 bytes")]
+    ExecutionDataTooLarge,
+
+    #[msg("Invalid voting period - must be 3, 7, or 14 days")]
+    InvalidVotingPeriod,
 }
