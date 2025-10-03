@@ -24,15 +24,19 @@ pub const MAX_TITLE_LENGTH: usize = 100;
 pub const MAX_DESCRIPTION_LENGTH: usize = 1000;
 pub const MAX_EXECUTION_DATA_LENGTH: usize = 500;
 
-// Voting configuration parameters
-pub const VOTING_PERIOD_3_DAYS: u8 = 3;
-pub const VOTING_PERIOD_7_DAYS: u8 = 7;
-pub const VOTING_PERIOD_14_DAYS: u8 = 14;
+// Voting configuration parameters - ALL SET TO 0 FOR TESTING
+pub const VOTING_PERIOD_3_DAYS: u8 = 0; // ✅ Already set to 0
+pub const VOTING_PERIOD_7_DAYS: u8 = 0; // Change from 7 to 0
+pub const VOTING_PERIOD_14_DAYS: u8 = 0; // Change from 14 to 0
 pub const VALID_VOTING_PERIODS: [u8; 3] = [
     VOTING_PERIOD_3_DAYS,
     VOTING_PERIOD_7_DAYS,
     VOTING_PERIOD_14_DAYS,
 ];
+
+pub const QUORUM_PERCENTAGE: u64 = 10;
+pub const PASSINT_THRESHOLD_PERCENTAGE: u64 = 51;
+pub const TIME_LOCK_DURATION: i64 = 0 * 86400; // Change from 3 to 0 for instant execution testing
 
 // Seeds
 pub const PROPOSAL_SEED: &[u8] = b"proposalV1";
@@ -476,6 +480,196 @@ pub mod zero_sided_snipe {
         Ok(())
     }
 
+    pub fn finalize_proposal(ctx: Context<FinalizeProposal>) -> Result<()> {
+        let proposal = &mut ctx.accounts.proposal_account;
+        let staking_pool = &ctx.accounts.staking_pool;
+        let clock = Clock::get()?;
+
+        // ===== VALIDATION 1: Voting Period Must Have Ended =====
+        require!(
+            clock.unix_timestamp >= proposal.voting_ends_at,
+            ErrorCode::VotingPeriodNotEnded
+        );
+
+        // ===== VALIDATION 2: Proposal Must Still Be Active =====
+        require!(
+            proposal.status == ProposalStatus::Active,
+            ErrorCode::ProposalNotActive
+        );
+
+        // ===== VALIDATION 3: Not Already Finalized =====
+        require!(
+            proposal.finalized_at == 0,
+            ErrorCode::ProposalAlreadyFinalized
+        );
+
+        // ===== CALCULATE TOTAL VOTES CAST =====
+        let total_votes_cast = proposal
+            .yes_votes
+            .checked_add(proposal.no_votes)
+            .ok_or(ErrorCode::InvalidAmount)?
+            .checked_add(proposal.abstain_votes)
+            .ok_or(ErrorCode::InvalidAmount)?;
+
+        // ===== CALCULATE TOTAL VOTING POWER =====
+        // Using staking pool's total staked amount as proxy for total voting power
+        // This is more gas-efficient than iterating through all users
+        let total_voting_power = staking_pool.total_staked_amount / 1_000_000; // Convert to tokens
+
+        // ===== CHECK QUORUM (10% of total voting power) =====
+        let quorum_required = total_voting_power
+            .checked_mul(QUORUM_PERCENTAGE)
+            .ok_or(ErrorCode::InvalidAmount)?
+            .checked_div(100)
+            .ok_or(ErrorCode::InvalidAmount)?;
+
+        let quorum_met = total_votes_cast >= quorum_required;
+
+        msg!("📊 Vote Counting:");
+        msg!("  Yes: {}", proposal.yes_votes);
+        msg!("  No: {}", proposal.no_votes);
+        msg!("  Abstain: {}", proposal.abstain_votes);
+        msg!("  Total votes cast: {}", total_votes_cast);
+        msg!("  Total voting power: {}", total_voting_power);
+        msg!(
+            "  Quorum required: {} ({}%)",
+            quorum_required,
+            QUORUM_PERCENTAGE
+        );
+        msg!("  Quorum met: {}", quorum_met);
+
+        // ===== DETERMINE PROPOSAL OUTCOME =====
+        if !quorum_met {
+            // Quorum not met - proposal fails, refund deposit
+            proposal.status = ProposalStatus::Failed;
+            proposal.finalized_at = clock.unix_timestamp;
+
+            // Refund deposit to proposer
+            transfer_deposit_to_proposer(
+                &ctx.accounts.deposit_escrow_account,
+                &ctx.accounts.proposer_token_account,
+                &ctx.accounts.token_mint,
+                &ctx.accounts.program_authority,
+                &ctx.accounts.token_program,
+                proposal.deposit_amount,
+                ctx.accounts.staking_pool.authority_bump,
+            )?;
+
+            proposal.deposit_refunded = true;
+
+            msg!(
+                "❌ Proposal #{} FAILED - Quorum not met",
+                proposal.proposal_id
+            );
+            msg!(
+                "💰 Deposit of {} tokens refunded to proposer",
+                proposal.deposit_amount / 1_000_000
+            );
+
+            return Ok(());
+        }
+
+        // ===== CHECK PASSING THRESHOLD (51% of yes/no votes) =====
+        // Note: Abstentions are excluded from threshold calculation
+        let yes_no_total = proposal
+            .yes_votes
+            .checked_add(proposal.no_votes)
+            .ok_or(ErrorCode::InvalidAmount)?;
+
+        // Avoid division by zero
+        if yes_no_total == 0 {
+            // All votes were abstentions - treat as failed
+            proposal.status = ProposalStatus::Failed;
+            proposal.finalized_at = clock.unix_timestamp;
+
+            // Refund deposit
+            transfer_deposit_to_proposer(
+                &ctx.accounts.deposit_escrow_account,
+                &ctx.accounts.proposer_token_account,
+                &ctx.accounts.token_mint,
+                &ctx.accounts.program_authority,
+                &ctx.accounts.token_program,
+                proposal.deposit_amount,
+                ctx.accounts.staking_pool.authority_bump,
+            )?;
+
+            proposal.deposit_refunded = true;
+
+            msg!(
+                "❌ Proposal #{} FAILED - All votes were abstentions",
+                proposal.proposal_id
+            );
+            msg!("💰 Deposit refunded to proposer");
+
+            return Ok(());
+        }
+
+        // Calculate yes vote percentage (excluding abstentions)
+        let yes_percentage = proposal
+            .yes_votes
+            .checked_mul(100)
+            .ok_or(ErrorCode::InvalidAmount)?
+            .checked_div(yes_no_total)
+            .ok_or(ErrorCode::InvalidAmount)?;
+
+        let threshold_met = yes_percentage >= PASSINT_THRESHOLD_PERCENTAGE;
+
+        msg!("  Yes percentage: {}%", yes_percentage);
+        msg!("  Threshold required: {}%", PASSINT_THRESHOLD_PERCENTAGE);
+        msg!("  Threshold met: {}", threshold_met);
+
+        if !threshold_met {
+            // Threshold not met - proposal fails, refund deposit
+            proposal.status = ProposalStatus::Failed;
+            proposal.finalized_at = clock.unix_timestamp;
+
+            // Refund deposit to proposer
+            transfer_deposit_to_proposer(
+                &ctx.accounts.deposit_escrow_account,
+                &ctx.accounts.proposer_token_account,
+                &ctx.accounts.token_mint,
+                &ctx.accounts.program_authority,
+                &ctx.accounts.token_program,
+                proposal.deposit_amount,
+                ctx.accounts.staking_pool.authority_bump,
+            )?;
+
+            proposal.deposit_refunded = true;
+
+            msg!(
+                "❌ Proposal #{} FAILED - Threshold not met",
+                proposal.proposal_id
+            );
+            msg!(
+                "💰 Deposit of {} tokens refunded to proposer",
+                proposal.deposit_amount / 1_000_000
+            );
+
+            return Ok(());
+        }
+
+        // ===== PROPOSAL PASSED - SET TIMELOCK =====
+        proposal.status = ProposalStatus::Passed;
+        proposal.finalized_at = clock.unix_timestamp;
+        proposal.timelock_end = clock
+            .unix_timestamp
+            .checked_add(TIME_LOCK_DURATION)
+            .ok_or(ErrorCode::InvalidAmount)?;
+
+        msg!("✅ Proposal #{} PASSED!", proposal.proposal_id);
+        msg!(
+            "🔒 Timelock set until: {} (Unix timestamp)",
+            proposal.timelock_end
+        );
+        msg!(
+            "⏰ Execution available after: {} days",
+            TIME_LOCK_DURATION / 86400
+        );
+        msg!("💰 Deposit will be refunded upon successful execution");
+
+        Ok(())
+    }
+
 }
 
 fn calculate_hybrid_voting_power(stake_amount: u64, stake_duration_days: u32) -> u64 {
@@ -496,6 +690,38 @@ fn calculate_hybrid_voting_power(stake_amount: u64, stake_duration_days: u32) ->
     };
 
     (base_power * time_multiplier) / 100 // (999 × 100) / 100 = 999
+}
+
+// Helper function to transfer deposit back to proposer
+fn transfer_deposit_to_proposer<'info>(
+    deposit_escrow: &InterfaceAccount<'info, TokenAccount>,
+    proposer_token_account: &InterfaceAccount<'info, TokenAccount>,
+    token_mint: &InterfaceAccount<'info, Mint>,
+    program_authority: &UncheckedAccount<'info>,
+    token_program: &Interface<'info, TokenInterface>,
+    amount: u64,
+    authority_bump: u8,
+) -> Result<()> {
+    let authority_bump_arr = &[authority_bump];
+    let authority_seeds = &[PROGRAM_AUTHORITY_SEED.as_ref(), authority_bump_arr.as_ref()];
+    let signer_seeds = &[&authority_seeds[..]];
+
+    transfer_checked(
+        CpiContext::new_with_signer(
+            token_program.to_account_info(),
+            TransferChecked {
+                from: deposit_escrow.to_account_info(),
+                mint: token_mint.to_account_info(),
+                to: proposer_token_account.to_account_info(),
+                authority: program_authority.to_account_info(),
+            },
+            signer_seeds,
+        ),
+        amount,
+        token_mint.decimals,
+    )?;
+
+    Ok(())
 }
 
 // === ACCOUNT STRUCTURES ===
@@ -934,6 +1160,61 @@ pub struct CastVote<'info> {
     pub system_program: Program<'info, System>,
 }
 
+// Account context for finalize_proposal
+#[derive(Accounts)]
+pub struct FinalizeProposal<'info> {
+    /// Anyone can finalize (permissionless)
+    #[account(mut)]
+    pub finalizer: Signer<'info>,
+
+    /// The proposal being finalized
+    #[account(
+        mut,
+        seeds = [PROPOSAL_SEED, proposal_account.proposal_id.to_le_bytes().as_ref()],
+        bump = proposal_account.bump,
+    )]
+    pub proposal_account: Account<'info, ProposalAccount>,
+
+    /// Staking pool (to get total voting power and program authority)
+    #[account(
+        seeds = [STAKING_POOL_SEED],
+        bump = staking_pool.bump,
+    )]
+    pub staking_pool: Account<'info, StakingPool>,
+
+    /// Program authority (for signing deposit refund)
+    #[account(
+        seeds = [PROGRAM_AUTHORITY_SEED],
+        bump = staking_pool.authority_bump
+    )]
+    /// CHECK: Program authority PDA
+    pub program_authority: UncheckedAccount<'info>,
+
+    /// Deposit escrow account (source of refund)
+    #[account(
+        mut,
+        seeds = [PROPOSAL_ESCROW_SEED],
+        bump,
+    )]
+    pub deposit_escrow_account: InterfaceAccount<'info, TokenAccount>,
+
+    /// Proposer's token account (destination of refund)
+    #[account(
+        mut,
+        constraint = proposer_token_account.owner == proposal_account.proposer @ ErrorCode::InvalidProposerAccount,
+    )]
+    pub proposer_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    /// The token mint (ZSNIPE)
+    #[account(
+        constraint = token_mint.to_account_info().owner == &spl_token_2022::ID @ ErrorCode::InvalidTokenProgram
+    )]
+    pub token_mint: InterfaceAccount<'info, Mint>,
+
+    /// Token program (Token-2022)
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
 #[error_code]
 pub enum ErrorCode {
     #[msg("Stake amount below minimum requirement")]
@@ -1013,4 +1294,13 @@ pub enum ErrorCode {
 
     #[msg("Already voted on this proposal - vote changes not allowed")]
     AlreadyVoted,
+
+    #[msg("Voting period has not ended yet")]
+    VotingPeriodNotEnded,
+
+    #[msg("Proposal has already been finalized")]
+    ProposalAlreadyFinalized,
+
+    #[msg("Invalid proposer token account")]
+    InvalidProposerAccount,
 }
