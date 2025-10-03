@@ -10,12 +10,14 @@ import {
   // Renamed to avoid import conflict
   createProposalTransaction as importedCreateProposalTransaction,
   createCastVoteTransaction,
+  createFinalizeProposalTransaction,
   getStakingPoolInfo,
   getUserStakingInfo,
   getGovernanceAccountInfo,
   getProposalInfo,
   getAllProposals,
   getVoteRecord,
+  getProposalFinalizationStatus,
   calculateHybridVotingPower,
   checkVotingEligibility,
   MIN_STAKE_TO_PROPOSE,
@@ -460,6 +462,59 @@ export async function getProposalRequirementsInterface(req: Request, res: Respon
     res.status(500).json({ 
       success: false, 
       error: error?.message || 'Failed to fetch requirements' 
+    });
+  }
+}
+
+// === Create Finalize Proposal Transaction ===
+export async function createFinalizeProposalTransactionInterface(req: Request, res: Response) {
+  try {
+    const { userPublicKey, proposalId } = req.body;
+
+    // Validation
+    if (!userPublicKey || typeof userPublicKey !== 'string') {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Valid userPublicKey is required' 
+      });
+    }
+
+    if (!proposalId || typeof proposalId !== 'number') {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Valid proposalId (number) is required' 
+      });
+    }
+
+    const result = await createFinalizeProposalTransaction(userPublicKey, proposalId);
+    res.status(200).json(result);
+  } catch (error: any) {
+    console.error("Create finalize proposal transaction error:", error);
+    res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Failed to create finalize proposal transaction' 
+    });
+  }
+}
+
+// === Get Proposal Finalization Status ===
+export async function getProposalFinalizationStatusInterface(req: Request, res: Response) {
+  try {
+    const proposalId = Number(req.params.proposalId);
+    
+    if (!Number.isFinite(proposalId) || proposalId < 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Valid proposalId is required' 
+      });
+    }
+
+    const result = await getProposalFinalizationStatus(proposalId);
+    res.status(200).json(result);
+  } catch (error: any) {
+    res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Failed to fetch proposal finalization status' 
     });
   }
 }

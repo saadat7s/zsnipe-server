@@ -22,7 +22,9 @@ import {
   listProposals,
   bulkVote,
   getVote,
-  submitVote
+  submitVote,
+  finalizeProposalController,
+  getFinalizationStatusController
 } from '../controllers/stakingController';
 
 const router = Router();
@@ -54,11 +56,16 @@ router.post('/proposals/create', submitProposal);
 router.get('/proposals/requirements', getProposalRequirements);
 router.get('/proposals/list', listProposals);
 router.get('/proposals/:proposalId', getProposal);
+router.post('/proposals/:proposalId/finalize', finalizeProposalController);
+router.get('/proposals/:proposalId/finalization-status', getFinalizationStatusController);
+
 
 // Vote routes
 router.post('/votes/cast', submitVote);
 router.get('/votes/:proposalId', getVote);
 router.post('/votes/bulk-cast', bulkVote);
+
+
 
 
 

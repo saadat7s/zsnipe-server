@@ -1016,7 +1016,7 @@ export async function createProposal(
   if (executionData.length > 500) {
     throw new Error("Execution data too large (max 500 bytes)");
   }
-  if (![3, 7, 14].includes(votingPeriod)) {
+  if (![0, 7, 14].includes(votingPeriod)) {
     throw new Error("Voting period must be 3, 7, or 14 days");
   }
 
@@ -1406,4 +1406,212 @@ export async function bulkCastVote(
     voteChoice: VoteChoice[voteChoice],
     results: results,
   };
+}
+
+// Add this to your helpers.ts file
+
+// === Finalize Proposal ===
+export async function finalizeProposal(
+  proposalId: number,
+  userKeypair?: Keypair
+) {
+  const { program, adminKeypair } = getProgram();
+  const finalizer = userKeypair || adminKeypair;
+
+  console.log(`Finalizing proposal #${proposalId} by ${finalizer.publicKey.toString()}`);
+
+  // Get all required PDAs
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [programAuthority] = getProgramAuthorityPda(program.programId);
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+  const [depositEscrowAccount] = getProposalEscrowPda(program.programId);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  // Pre-flight checks
+  try {
+    // Check if proposal exists
+    const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    const status = Object.keys(proposalData.status)[0];
+
+    // Convert BN to numbers FIRST
+    const votingEndsAtNum = typeof proposalData.votingEndsAt === 'number' 
+      ? proposalData.votingEndsAt 
+      : Number(proposalData.votingEndsAt);
+
+    const finalizedAtNum = typeof proposalData.finalizedAt === 'number'
+      ? proposalData.finalizedAt
+      : Number(proposalData.finalizedAt);
+
+    console.log(`Proposal status: ${status}`);
+    console.log(`Voting ends at: ${new Date(votingEndsAtNum * 1000)}`);
+
+    // Check if proposal is still active
+    if (status !== 'active') {
+      throw new Error(`Proposal is not active. Current status: ${status}`);
+    }
+
+    // Check if voting period has ended
+    const currentTime = Math.floor(Date.now() / 1000);
+    if (currentTime < votingEndsAtNum) {  // Use converted number
+      const timeRemaining = votingEndsAtNum - currentTime;
+      const hoursRemaining = Math.floor(timeRemaining / 3600);
+      const minutesRemaining = Math.floor((timeRemaining % 3600) / 60);
+      throw new Error(
+        `Voting period has not ended yet. ${hoursRemaining}h ${minutesRemaining}m remaining`
+      );
+    }
+
+// Check if already finalized
+if (finalizedAtNum !== 0) {  // Use converted number
+  throw new Error("Proposal has already been finalized");
+}
+
+    // Get proposer's token account for potential deposit refund
+    const proposerTokenAccount = getAssociatedTokenAddressSync(
+      tokenMintAddress,
+      new PublicKey(proposalData.proposer),
+      false,
+      TOKEN_2022_PROGRAM_ID
+    );
+
+    console.log("All validations passed, finalizing proposal...");
+    console.log(`Vote counts - Yes: ${proposalData.yesVotes.toString()}, No: ${proposalData.noVotes.toString()}, Abstain: ${proposalData.abstainVotes.toString()}`);
+
+    try {
+      const tx = await program.methods
+        .finalizeProposal()
+        .accounts({
+          finalizer: finalizer.publicKey,
+          proposalAccount: proposalAccount,
+          stakingPool: stakingPool,
+          programAuthority: programAuthority,
+          depositEscrowAccount: depositEscrowAccount,
+          proposerTokenAccount: proposerTokenAccount,
+          tokenMint: tokenMintAddress,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([finalizer])
+        .rpc();
+
+      console.log(`✅ Proposal #${proposalId} finalized successfully!`);
+      console.log(`Transaction: ${tx}`);
+
+// Fetch updated proposal to show final results
+    const updatedProposal = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    const finalStatus = Object.keys(updatedProposal.status)[0];
+
+    // Convert BN to numbers
+    const finalizedAtNum = typeof updatedProposal.finalizedAt === 'number'
+      ? updatedProposal.finalizedAt
+      : Number(updatedProposal.finalizedAt);
+
+    const timelockEndNum = typeof updatedProposal.timelockEnd === 'number'
+      ? updatedProposal.timelockEnd
+      : Number(updatedProposal.timelockEnd);
+
+    console.log(`Final status: ${finalStatus}`);
+    console.log(`Finalized at: ${new Date(finalizedAtNum * 1000)}`);
+
+    if (finalStatus === 'passed') {
+      console.log(`Timelock ends at: ${new Date(timelockEndNum * 1000)}`);
+    }
+
+    if (updatedProposal.depositRefunded) {
+      console.log(`Deposit refunded: ${updatedProposal.depositAmount / 1_000_000} ZSNIPE`);
+    }
+
+    return {
+      success: true,
+      transactionId: tx,
+      proposalId: proposalId,
+      finalStatus: finalStatus,
+      finalizedAt: finalizedAtNum,  // Use converted number
+      timelockEnd: timelockEndNum !== 0 ? timelockEndNum : null,  // Use converted number
+      depositRefunded: updatedProposal.depositRefunded,
+      votes: {
+        yes: updatedProposal.yesVotes.toString(),
+        no: updatedProposal.noVotes.toString(),
+        abstain: updatedProposal.abstainVotes.toString(),
+        totalVoters: updatedProposal.totalVoters,
+      },
+    };
+    } catch (error) {
+      console.error("Error finalizing proposal:", error);
+      throw error;
+    }
+  } catch (error: any) {
+    if (error.message && error.message.includes("Account does not exist")) {
+      throw new Error(`Proposal #${proposalId} does not exist`);
+    }
+    throw error;
+  }
+}
+
+// === Get Proposal Finalization Status (helper) ===
+export async function getProposalFinalizationStatus(proposalId: number) {
+  const { program } = getProgram();
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+
+  try {
+    const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    const currentTime = Math.floor(Date.now() / 1000);
+    const status = Object.keys(proposalData.status)[0];
+
+    // CRITICAL FIX: Convert BN to number
+    const votingEndsAtNum = typeof proposalData.votingEndsAt === 'number' 
+      ? proposalData.votingEndsAt 
+      : Number(proposalData.votingEndsAt);
+    
+    const finalizedAtNum = typeof proposalData.finalizedAt === 'number'
+      ? proposalData.finalizedAt
+      : Number(proposalData.finalizedAt);
+
+    const canFinalize = 
+      status === 'active' && 
+      currentTime >= votingEndsAtNum &&
+      finalizedAtNum === 0;
+
+    const timeUntilVotingEnds = votingEndsAtNum - currentTime;
+    const isVotingEnded = timeUntilVotingEnds <= 0;
+
+    console.log(`=== Finalization Status for Proposal #${proposalId} ===`);
+    console.log(`Current Status: ${status}`);
+    console.log(`Voting Ended: ${isVotingEnded}`);
+    console.log(`Already Finalized: ${finalizedAtNum !== 0}`);
+    console.log(`Can Finalize: ${canFinalize}`);
+
+    if (!isVotingEnded) {
+      const hoursRemaining = Math.floor(timeUntilVotingEnds / 3600);
+      const minutesRemaining = Math.floor((timeUntilVotingEnds % 3600) / 60);
+      console.log(`Time until voting ends: ${hoursRemaining}h ${minutesRemaining}m`);
+    }
+
+    return {
+      success: true,
+      proposalId: proposalId,
+      currentStatus: status,
+      canFinalize: canFinalize,
+      votingEnded: isVotingEnded,
+      alreadyFinalized: finalizedAtNum !== 0,
+      votingEndsAt: votingEndsAtNum,
+      finalizedAt: finalizedAtNum !== 0 ? finalizedAtNum : null,
+      timeUntilVotingEnds: !isVotingEnded ? timeUntilVotingEnds : 0,
+      votes: {
+        yes: proposalData.yesVotes.toString(),
+        no: proposalData.noVotes.toString(),
+        abstain: proposalData.abstainVotes.toString(),
+        totalVoters: proposalData.totalVoters,
+      },
+    };
+  } catch (error: any) {
+    if (error.message && error.message.includes("Account does not exist")) {
+      throw new Error(`Proposal #${proposalId} does not exist`);
+    }
+    throw error;
+  }
 }

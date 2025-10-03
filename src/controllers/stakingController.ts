@@ -26,6 +26,8 @@ import {
   bulkCastVote,
   castVote,
   getVoteRecord,
+  getProposalFinalizationStatus,
+  finalizeProposal,
 
 } from '../services/staking/services';
 import { VoteChoice } from '../services/types';
@@ -599,3 +601,106 @@ export async function bulkVote(req: Request, res: Response) {
     });
   }
 }
+
+/**
+ * @route POST /api/governance/proposals/:proposalId/finalize
+ * @desc Finalize a proposal after voting period ends
+ * @access Public (permissionless)
+ */
+export const finalizeProposalController = async (req: Request, res: Response) => {
+  try {
+    const { proposalId } = req.params;
+    
+    // Validate proposalId
+    const proposalIdNum = parseInt(proposalId);
+    if (isNaN(proposalIdNum) || proposalIdNum < 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid proposal ID. Must be a non-negative number.',
+      });
+    }
+
+    console.log(`\n=== Finalizing Proposal #${proposalIdNum} ===`);
+
+    // Optional: Use a specific wallet if provided
+    // For now, defaulting to admin wallet (permissionless anyway)
+    const result = await finalizeProposal(proposalIdNum);
+
+    return res.status(200).json({
+      success: true,
+      message: `Proposal #${proposalIdNum} finalized successfully`,
+      data: result,
+    });
+
+  } catch (error: any) {
+    console.error('Error in finalizeProposalController:', error);
+    
+    // Handle specific error cases
+    if (error.message?.includes('does not exist')) {
+      return res.status(404).json({
+        success: false,
+        error: error.message,
+      });
+    }
+    
+    if (error.message?.includes('not ended yet') || 
+        error.message?.includes('not active') ||
+        error.message?.includes('already been finalized')) {
+      return res.status(400).json({
+        success: false,
+        error: error.message,
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to finalize proposal',
+      details: error.message,
+    });
+  }
+};
+
+/**
+ * @route GET /api/governance/proposals/:proposalId/finalization-status
+ * @desc Check if a proposal can be finalized
+ * @access Public
+ */
+export const getFinalizationStatusController = async (req: Request, res: Response) => {
+  try {
+    const { proposalId } = req.params;
+    
+    // Validate proposalId
+    const proposalIdNum = parseInt(proposalId);
+    if (isNaN(proposalIdNum) || proposalIdNum < 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid proposal ID. Must be a non-negative number.',
+      });
+    }
+
+    console.log(`\n=== Checking Finalization Status for Proposal #${proposalIdNum} ===`);
+
+    const result = await getProposalFinalizationStatus(proposalIdNum);
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+
+  } catch (error: any) {
+    console.error('Error in getFinalizationStatusController:', error);
+    
+    if (error.message?.includes('does not exist')) {
+      return res.status(404).json({
+        success: false,
+        error: error.message,
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to get finalization status',
+      details: error.message,
+    });
+  }
+};

@@ -850,3 +850,140 @@ export async function checkVotingEligibility(userPublicKey: string) {
     return { success: false, error: error.message || 'Failed to check voting eligibility' };
   }
 }
+
+// === Create Finalize Proposal Transaction ===
+export async function createFinalizeProposalTransaction(
+  userPublicKey: string,
+  proposalId: number
+) {
+  const { program, connection } = getProgram();
+  const userPubKey = new PublicKey(userPublicKey);
+
+  // Get all required PDAs
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [programAuthority] = getProgramAuthorityPda(program.programId);
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+  const [depositEscrowAccount] = getProposalEscrowPda(program.programId);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  // Get proposer's token account for potential deposit refund
+  // We need to fetch the proposal first to get the proposer
+  let proposerTokenAccount: PublicKey;
+  try {
+    const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    proposerTokenAccount = getAssociatedTokenAddressSync(
+      tokenMintAddress,
+      new PublicKey(proposalData.proposer),
+      false,
+      TOKEN_2022_PROGRAM_ID
+    );
+  } catch (error: any) {
+    throw new Error(`Proposal #${proposalId} does not exist`);
+  }
+
+  try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+    
+    const transaction = await program.methods
+      .finalizeProposal()
+      .accounts({
+        finalizer: userPubKey,
+        proposalAccount: proposalAccount,
+        stakingPool: stakingPool,
+        programAuthority: programAuthority,
+        depositEscrowAccount: depositEscrowAccount,
+        proposerTokenAccount: proposerTokenAccount,
+        tokenMint: tokenMintAddress,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+      })
+      .transaction();
+
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = userPubKey;
+
+    return {
+      success: true,
+      message: "Finalize proposal transaction created successfully!",
+      transaction: transaction.serialize({ requireAllSignatures: false }).toString('base64'),
+      accounts: {
+        proposalAccount: proposalAccount.toString(),
+        stakingPool: stakingPool.toString(),
+        programAuthority: programAuthority.toString(),
+        depositEscrowAccount: depositEscrowAccount.toString(),
+        proposerTokenAccount: proposerTokenAccount.toString(),
+      }
+    };
+  } catch (error: any) {
+    console.error("Error creating finalize proposal transaction:", error);
+    return { 
+      success: false, 
+      message: `Error creating finalize proposal transaction: ${error.message || error}` 
+    };
+  }
+}
+
+// === Get Proposal Finalization Status ===
+export async function getProposalFinalizationStatus(proposalId: number) {
+  const { program } = getProgram();
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+
+  try {
+    const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    const currentTime = Math.floor(Date.now() / 1000);
+    const status = Object.keys(proposalData.status)[0];
+
+    // Convert BN to number
+    const votingEndsAtNum = typeof proposalData.votingEndsAt === 'number' 
+      ? proposalData.votingEndsAt 
+      : Number(proposalData.votingEndsAt);
+    
+    const finalizedAtNum = typeof proposalData.finalizedAt === 'number'
+      ? proposalData.finalizedAt
+      : Number(proposalData.finalizedAt);
+
+    const canFinalize = 
+      status === 'active' && 
+      currentTime >= votingEndsAtNum &&
+      finalizedAtNum === 0;
+
+    const timeUntilVotingEnds = votingEndsAtNum - currentTime;
+    const isVotingEnded = timeUntilVotingEnds <= 0;
+
+    return {
+      success: true,
+      data: {
+        proposalId: proposalId,
+        currentStatus: status,
+        canFinalize: canFinalize,
+        votingEnded: isVotingEnded,
+        alreadyFinalized: finalizedAtNum !== 0,
+        votingEndsAt: votingEndsAtNum,
+        finalizedAt: finalizedAtNum !== 0 ? finalizedAtNum : null,
+        timeUntilVotingEnds: !isVotingEnded ? timeUntilVotingEnds : 0,
+        votes: {
+          yes: proposalData.yesVotes.toString(),
+          no: proposalData.noVotes.toString(),
+          abstain: proposalData.abstainVotes.toString(),
+          totalVoters: proposalData.totalVoters,
+        },
+      }
+    };
+  } catch (error: any) {
+    console.error("Error fetching proposal finalization status:", error);
+    if (error.message && error.message.includes("Account does not exist")) {
+      return { 
+        success: false, 
+        error: `Proposal #${proposalId} does not exist` 
+      };
+    }
+    return { 
+      success: false, 
+      error: error.message || 'Failed to fetch proposal finalization status' 
+    };
+  }
+}

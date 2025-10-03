@@ -8,12 +8,14 @@ import {
   createInitProposalEscrowTransaction,
   createProposalTransaction,
   createVoteTransaction,
+  createFinalizeProposalTransactionInterface,
   getPoolInfoInterface,
   getUserStakingInfoInterface,
   getGovernanceInfoInterface,
   getProposalInfoInterface,
   listProposalsInterface,
   getVoteRecordInterface,
+  getProposalFinalizationStatusInterface,
   previewVotingPowerInterface,
   checkEligibilityInterface,
   getProposalRequirementsInterface
@@ -460,5 +462,107 @@ router.get('/data/votes/:proposalId', getVoteRecordInterface);
  *         description: Calculated voting power
  */
 router.get('/utils/preview-voting-power', previewVotingPowerInterface);
+
+/**
+ * @swagger
+ * /api/zSnipe/transactions/finalize-proposal:
+ *   post:
+ *     summary: Create finalize proposal transaction
+ *     tags: [Transactions]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - userPublicKey
+ *               - proposalId
+ *             properties:
+ *               userPublicKey:
+ *                 type: string
+ *                 description: User's Solana public key
+ *               proposalId:
+ *                 type: number
+ *                 description: Proposal ID to finalize
+ *                 example: 1
+ *     responses:
+ *       200:
+ *         description: Finalize proposal transaction created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/TransactionResponse'
+ *       400:
+ *         description: Invalid input
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ */
+router.post('/transactions/finalize-proposal', createFinalizeProposalTransactionInterface);
+
+/**
+ * @swagger
+ * /api/zSnipe/data/proposals/{proposalId}/finalization-status:
+ *   get:
+ *     summary: Get proposal finalization status
+ *     tags: [Proposals]
+ *     parameters:
+ *       - in: path
+ *         name: proposalId
+ *         required: true
+ *         schema:
+ *           type: number
+ *         description: Proposal ID
+ *     responses:
+ *       200:
+ *         description: Proposal finalization status
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     proposalId:
+ *                       type: number
+ *                     currentStatus:
+ *                       type: string
+ *                     canFinalize:
+ *                       type: boolean
+ *                     votingEnded:
+ *                       type: boolean
+ *                     alreadyFinalized:
+ *                       type: boolean
+ *                     votingEndsAt:
+ *                       type: number
+ *                     finalizedAt:
+ *                       type: number
+ *                       nullable: true
+ *                     timeUntilVotingEnds:
+ *                       type: number
+ *                     votes:
+ *                       type: object
+ *                       properties:
+ *                         yes:
+ *                           type: string
+ *                         no:
+ *                           type: string
+ *                         abstain:
+ *                           type: string
+ *                         totalVoters:
+ *                           type: number
+ *       400:
+ *         description: Invalid proposal ID
+ *       500:
+ *         description: Server error
+ */
+router.get('/data/proposals/:proposalId/finalization-status', getProposalFinalizationStatusInterface);
 
 export default router;
