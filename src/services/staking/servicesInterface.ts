@@ -616,12 +616,12 @@ export async function getUserStakingInfo(userPublicKey: string) {
 
   try {
     const stakingInfo = await program.account.userStakingAccount.fetch(userStakingAccount) as UserStakingAccount;
-    
+    console.log("stakingInfo", stakingInfo.stakedAmount.toNumber()/1_000_000);
     return {
       success: true,
       data: {
         staker: stakingInfo.staker.toString(),
-        stakedAmount: stakingInfo.stakedAmount.toNumber(),
+        stakedAmount: stakingInfo.stakedAmount.toNumber()/1_000_000,
         timestamp: stakingInfo.timestamp.toNumber(),
         lastUpdated: stakingInfo.lastUpdated.toNumber(),
         bump: stakingInfo.bump,
@@ -957,6 +957,66 @@ export async function getProposalFinalizationStatus(proposalId: number) {
     return { 
       success: false, 
       error: error.message || 'Failed to fetch proposal finalization status' 
+    };
+  }
+}
+
+// === Check User Token Balance ===
+export async function checkUserTokenBalance(userPublicKey: string) {
+  const { connection } = getProgram();
+  const userPubKey = new PublicKey(userPublicKey);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  const userTokenAccount = getAssociatedTokenAddressSync(
+    tokenMintAddress,
+    userPubKey,
+    false,
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  try {
+    const accountInfo = await connection.getParsedAccountInfo(userTokenAccount);
+    
+    if (accountInfo.value) {
+      const tokenBalance = (accountInfo.value.data as any).parsed.info.tokenAmount;
+      console.log(`User token balance: ${tokenBalance.uiAmount} tokens`);
+      console.log(`Raw amount: ${tokenBalance.amount}`);
+      
+      return {
+        success: true,
+        data: {
+          balance: tokenBalance.uiAmount,
+          decimals: tokenBalance.decimals,
+          tokenAccount: userTokenAccount.toString(),
+          tokenMint: tokenMintAddress.toString(),
+          userPublicKey: userPubKey.toString()
+        }
+      };
+    } else {
+      console.log("User token account doesn't exist");
+      return {
+        success: true,
+        data: {
+          balance: 0,
+          rawBalance: "0",
+          decimals: 6,
+          tokenAccount: userTokenAccount.toString(),
+          tokenMint: tokenMintAddress.toString(),
+          userPublicKey: userPubKey.toString(),
+          message: "Token account does not exist - user has no tokens"
+        }
+      };
+    }
+  } catch (error: any) {
+    console.error("Error checking user token balance:", error);
+    return { 
+      success: false, 
+      error: error.message || 'Failed to check user token balance' 
     };
   }
 }

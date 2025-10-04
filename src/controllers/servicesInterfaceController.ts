@@ -18,6 +18,7 @@ import {
   getAllProposals,
   getVoteRecord,
   getProposalFinalizationStatus,
+  checkUserTokenBalance,
   calculateHybridVotingPower,
   checkVotingEligibility,
   MIN_STAKE_TO_PROPOSE,
@@ -515,6 +516,28 @@ export async function getProposalFinalizationStatusInterface(req: Request, res: 
     res.status(500).json({ 
       success: false, 
       error: error?.message || 'Failed to fetch proposal finalization status' 
+    });
+  }
+}
+
+// === Check User Token Balance ===
+export async function checkUserTokenBalanceInterface(req: Request, res: Response) {
+  try {
+    const { userPublicKey } = req.params;
+    
+    if (!userPublicKey || typeof userPublicKey !== 'string') {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Valid userPublicKey is required' 
+      });
+    }
+
+    const result = await checkUserTokenBalance(userPublicKey);
+    res.status(200).json(result);
+  } catch (error: any) {
+    res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Failed to check user token balance' 
     });
   }
 }

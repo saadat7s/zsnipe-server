@@ -16,6 +16,7 @@ import {
   listProposalsInterface,
   getVoteRecordInterface,
   getProposalFinalizationStatusInterface,
+  checkUserTokenBalanceInterface,
   previewVotingPowerInterface,
   checkEligibilityInterface,
   getProposalRequirementsInterface
@@ -564,5 +565,59 @@ router.post('/transactions/finalize-proposal', createFinalizeProposalTransaction
  *         description: Server error
  */
 router.get('/data/proposals/:proposalId/finalization-status', getProposalFinalizationStatusInterface);
+
+/**
+ * @swagger
+ * /api/zSnipe/data/token-balance/{userPublicKey}:
+ *   get:
+ *     summary: Check user token balance
+ *     tags: [User Data]
+ *     parameters:
+ *       - in: path
+ *         name: userPublicKey
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: User's Solana public key
+ *     responses:
+ *       200:
+ *         description: User token balance information
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     balance:
+ *                       type: number
+ *                       description: Token balance in UI units
+ *                     rawBalance:
+ *                       type: string
+ *                       description: Raw token balance (with decimals)
+ *                     decimals:
+ *                       type: number
+ *                       description: Token decimals
+ *                     tokenAccount:
+ *                       type: string
+ *                       description: Associated token account address
+ *                     tokenMint:
+ *                       type: string
+ *                       description: Token mint address
+ *                     userPublicKey:
+ *                       type: string
+ *                       description: User's public key
+ *                     message:
+ *                       type: string
+ *                       description: Additional information (if account doesn't exist)
+ *       400:
+ *         description: Invalid userPublicKey
+ *       500:
+ *         description: Server error
+ */
+router.get('/data/token-balance/:userPublicKey', checkUserTokenBalanceInterface);
 
 export default router;
