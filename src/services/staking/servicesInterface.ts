@@ -143,6 +143,8 @@ export async function createInitializeStakingPoolTransaction(adminPublicKey: Pub
   const tokenMintAddress = new PublicKey(tokenMint);
 
   try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+
     const transaction = await program.methods
       .initializeStakingPool()
       .accounts({
@@ -158,6 +160,7 @@ export async function createInitializeStakingPoolTransaction(adminPublicKey: Pub
       .transaction();
 
     transaction.feePayer = adminPublicKey;  
+    transaction.recentBlockhash = blockhash;
 
     return {
       success: true,
@@ -180,7 +183,8 @@ export async function createInitializeStakingPoolTransaction(adminPublicKey: Pub
 }
 
 // === Create Stake Tokens Transaction ===
-export async function createStakeTokensTransaction(userPublicKey: string, amount: number) {
+export async function 
+createStakeTokensTransaction(userPublicKey: string, amount: number) {
   const { program, connection } = getProgram();
   const userPubKey = new PublicKey(userPublicKey);
 
@@ -205,6 +209,9 @@ export async function createStakeTokensTransaction(userPublicKey: string, amount
   );
 
   try {
+
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+
     const transaction = await program.methods
       .stake(new anchor.BN(amount * Math.pow(10, 6)))
       .accounts({
@@ -219,7 +226,7 @@ export async function createStakeTokensTransaction(userPublicKey: string, amount
         tokenProgram: TOKEN_2022_PROGRAM_ID,
       })
       .transaction();
-
+    transaction.recentBlockhash = blockhash;
     transaction.feePayer = userPubKey;
 
     return {
@@ -269,6 +276,8 @@ export async function createUnstakeTokensTransaction(userPublicKey: string, amou
   );
 
   try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+
     const accounts: any = {
       staker: userPubKey,
       stakingPool: stakingPool,
@@ -289,6 +298,7 @@ export async function createUnstakeTokensTransaction(userPublicKey: string, amou
       .transaction();
 
     transaction.feePayer = userPubKey;
+    transaction.recentBlockhash = blockhash;
 
     return {
       success: true,
@@ -319,6 +329,8 @@ export async function createInitializeGovernanceAccountTransaction(userPublicKey
   const [governanceAccount] = getGovernancePda(program.programId, userPubKey);
 
   try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+
     const transaction = await program.methods
       .initializeGovernanceAccount()
       .accounts({
@@ -329,6 +341,7 @@ export async function createInitializeGovernanceAccountTransaction(userPublicKey
       .transaction();
 
     transaction.feePayer = userPubKey;
+    transaction.recentBlockhash = blockhash;
 
     return {
       success: true,
@@ -356,6 +369,8 @@ export async function createCalculateVotingPowerTransaction(userPublicKey: strin
   const [governanceAccount] = getGovernancePda(program.programId, userPubKey);
 
   try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+
     const transaction = await program.methods
       .calculateVotingPower()
       .accounts({
@@ -366,6 +381,7 @@ export async function createCalculateVotingPowerTransaction(userPublicKey: strin
       .transaction();
 
     transaction.feePayer = userPubKey;
+    transaction.recentBlockhash = blockhash;
 
     return {
       success: true,
@@ -400,6 +416,8 @@ export async function createInitializeProposalEscrowTransaction(adminPublicKey: 
   const tokenMintAddress = new PublicKey(tokenMint);
 
   try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+
     const transaction = await program.methods
       .initializeProposalEscrow()
       .accounts({
@@ -414,6 +432,7 @@ export async function createInitializeProposalEscrowTransaction(adminPublicKey: 
       .transaction();
 
     transaction.feePayer = adminPublicKey;
+    transaction.recentBlockhash = blockhash;
 
     return {
       success: true,
@@ -469,6 +488,8 @@ export async function createProposalTransaction(
   );
 
   try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+
     const transaction = await program.methods
       .createProposal(
         new anchor.BN(proposalId),
@@ -494,6 +515,7 @@ export async function createProposalTransaction(
       .transaction();
 
     transaction.feePayer = userPubKey;
+    transaction.recentBlockhash = blockhash;
 
     return {
       success: true,
@@ -547,6 +569,8 @@ export async function createCastVoteTransaction(
   }
 
   try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+
     const transaction = await program.methods
       .castVote(voteChoiceAnchor)
       .accounts({
@@ -560,6 +584,7 @@ export async function createCastVoteTransaction(
       .transaction();
 
     transaction.feePayer = userPubKey;
+    transaction.recentBlockhash = blockhash;
 
     return {
       success: true,
@@ -863,6 +888,8 @@ export async function createFinalizeProposalTransaction(
   }
 
   try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+
     const transaction = await program.methods
       .finalizeProposal()
       .accounts({
@@ -878,6 +905,7 @@ export async function createFinalizeProposalTransaction(
       .transaction();
 
     transaction.feePayer = userPubKey;
+    transaction.recentBlockhash = blockhash;
 
     return {
       success: true,
