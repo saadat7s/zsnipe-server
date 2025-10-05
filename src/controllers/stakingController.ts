@@ -28,7 +28,23 @@ import {
   getVoteRecord,
   getProposalFinalizationStatus,
   finalizeProposal,
-
+  initializeGovernanceConfig,
+  executeTextProposal,
+  executeTreasuryTransferProposal,
+  executeParameterUpdateProposal,
+  executeProposalSmart,
+  getExecutionReadinessReport,
+  getProposalExecutionPreview,
+  bulkExecuteReadyProposals,
+  getExecutionSchedule,
+  getAdminTreasuryAccount,
+  initializeTreasury,
+  fundTreasury,
+  getTreasuryAccount,
+  decodeParameterUpdateExecutionData,
+  decodeTreasuryTransferExecutionData,
+  buildTreasuryTransferExecutionData,
+  buildParameterUpdateExecutionData,
 } from '../services/staking/services';
 import { VoteChoice } from '../services/types';
 
@@ -405,7 +421,7 @@ export async function getProposalRequirements(req: Request, res: Response) {
     const stakingInfo = await getUserStakingInfo(userKeypair);
 
     const meetsStakeAmount = stakingInfo 
-      ? stakingInfo.stakedAmount.toNumber() >= MIN_STAKE_TO_PROPOSE 
+      ? Number(stakingInfo.stakedAmount) >= MIN_STAKE_TO_PROPOSE 
       : false;
 
     const meetsStakeDuration = eligibility.isEligible && 
@@ -424,7 +440,7 @@ export async function getProposalRequirements(req: Request, res: Response) {
       },
       userStatus: {
         walletNumber: walletNumber || 'admin',
-        currentStake: stakingInfo ? stakingInfo.stakedAmount.toNumber() / 1_000_000 : 0,
+        currentStake: stakingInfo ? Number(stakingInfo.stakedAmount) / 1_000_000 : 0,
         stakeDuration: eligibility.stakeDurationDays || 0,
         meetsStakeAmount,
         meetsStakeDuration,
@@ -701,6 +717,586 @@ export const getFinalizationStatusController = async (req: Request, res: Respons
       success: false,
       error: 'Failed to get finalization status',
       details: error.message,
+    });
+  }
+};
+
+
+/**
+ * @route POST /api/governance/config/initialize
+ * @desc Initialize the governance config account (one-time setup)
+ * @access Admin
+ */
+export const initializeGovernanceConfigController = async (req: Request, res: Response) => {
+  try {
+    const { walletNumber } = req.body;
+
+    let userKeypair = undefined;
+    const walletNum = Number(walletNumber) || null;
+    if (walletNum && walletNum >= 1 && walletNum <= 10) {
+      userKeypair = getMockWalletKeypair(walletNum);
+    }
+
+    const result = await initializeGovernanceConfig(userKeypair);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Governance config initialized',
+      data: result,
+      walletNumber: walletNum || 'admin',
+    });
+  } catch (error: any) {
+    console.error('Error in initializeGovernanceConfigController:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to initialize governance config',
+      details: error.message,
+    });
+  }
+};
+
+
+/**
+ * @route POST /api/governance/proposals/:proposalId/execute/text
+ * @desc Execute a text proposal
+ * @access Public (permissionless)
+ */
+export const executeTextProposalController = async (req: Request, res: Response) => {
+  try {
+    const { proposalId } = req.params;
+    const { walletNumber } = req.body;
+
+    const proposalIdNum = parseInt(proposalId);
+    if (isNaN(proposalIdNum) || proposalIdNum < 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid proposal ID',
+      });
+    }
+
+    let userKeypair = undefined;
+    const walletNum = Number(walletNumber) || null;
+    if (walletNum && walletNum >= 1 && walletNum <= 10) {
+      userKeypair = getMockWalletKeypair(walletNum);
+    }
+
+    const result = await executeTextProposal(proposalIdNum, userKeypair);
+
+    return res.status(200).json({
+      success: result.success,
+      message: result.success
+        ? `Text proposal #${proposalIdNum} executed successfully`
+        : 'Failed to execute text proposal',
+      data: result,
+      walletNumber: walletNum || 'admin',
+    });
+  } catch (error: any) {
+    console.error('Error in executeTextProposalController:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to execute text proposal',
+      details: error.message,
+    });
+  }
+};/**
+ * @route POST /api/governance/proposals/:proposalId/execute/treasury
+ * @desc Execute a treasury transfer proposal
+ * @access Public (permissionless)
+ */
+export const executeTreasuryTransferController = async (req: Request, res: Response) => {
+  try {
+    const { proposalId } = req.params;
+    const { treasuryAccount, recipientAccount, walletNumber } = req.body;
+
+    const proposalIdNum = parseInt(proposalId);
+    if (isNaN(proposalIdNum) || proposalIdNum < 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid proposal ID',
+      });
+    }
+
+    if (!treasuryAccount || !recipientAccount) {
+      return res.status(400).json({
+        success: false,
+        error: 'Both treasuryAccount and recipientAccount are required',
+      });
+    }
+
+    let userKeypair = undefined;
+    const walletNum = Number(walletNumber) || null;
+    if (walletNum && walletNum >= 1 && walletNum <= 10) {
+      userKeypair = getMockWalletKeypair(walletNum);
+    }
+
+    const result = await executeTreasuryTransferProposal(
+      proposalIdNum,
+      treasuryAccount,
+      recipientAccount,
+      userKeypair
+    );
+
+    return res.status(200).json({
+      success: result.success,
+      message: result.success
+        ? `Treasury transfer proposal #${proposalIdNum} executed successfully`
+        : 'Failed to execute treasury transfer',
+      data: result,
+      walletNumber: walletNum || 'admin',
+    });
+  } catch (error: any) {
+    console.error('Error in executeTreasuryTransferController:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to execute treasury transfer',
+      details: error.message,
+    });
+  }
+};
+
+
+/**
+ * @route POST /api/governance/proposals/:proposalId/execute/parameter
+ * @desc Execute a parameter update proposal
+ * @access Public (permissionless)
+ */
+export const executeParameterUpdateController = async (req: Request, res: Response) => {
+  try {
+    const { proposalId } = req.params;
+    const { walletNumber } = req.body;
+
+    const proposalIdNum = parseInt(proposalId);
+    if (isNaN(proposalIdNum) || proposalIdNum < 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid proposal ID',
+      });
+    }
+
+    let userKeypair = undefined;
+    const walletNum = Number(walletNumber) || null;
+    if (walletNum && walletNum >= 1 && walletNum <= 10) {
+      userKeypair = getMockWalletKeypair(walletNum);
+    }
+
+    const result = await executeParameterUpdateProposal(proposalIdNum, userKeypair);
+
+    return res.status(200).json({
+      success: result.success,
+      message: result.success
+        ? `Parameter update proposal #${proposalIdNum} executed successfully`
+        : 'Failed to execute parameter update',
+      data: result,
+      walletNumber: walletNum || 'admin',
+    });
+  } catch (error: any) {
+    console.error('Error in executeParameterUpdateController:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to execute parameter update',
+      details: error.message,
+    });
+  }
+};
+
+/**
+ * @route POST /api/governance/proposals/:proposalId/execute
+ * @desc Smart execution - auto-detects proposal type and executes
+ * @access Public (permissionless)
+ */
+export const executeProposalSmartController = async (req: Request, res: Response) => {
+  try {
+    const { proposalId } = req.params;
+    const { treasuryAccount, recipientAccount, walletNumber } = req.body;
+
+    const proposalIdNum = parseInt(proposalId);
+    if (isNaN(proposalIdNum) || proposalIdNum < 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid proposal ID',
+      });
+    }
+
+    let userKeypair = undefined;
+    const walletNum = Number(walletNumber) || null;
+    if (walletNum && walletNum >= 1 && walletNum <= 10) {
+      userKeypair = getMockWalletKeypair(walletNum);
+    }
+
+    const result = await executeProposalSmart(proposalIdNum, {
+      userKeypair,
+      treasuryAccount,
+      recipientAccount,
+    });
+
+    return res.status(200).json({
+      success: result.success,
+      message: result.success
+        ? `Proposal #${proposalIdNum} executed successfully`
+        : 'Failed to execute proposal',
+      data: result,
+      walletNumber: walletNum || 'admin',
+    });
+  } catch (error: any) {
+    console.error('Error in executeProposalSmartController:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to execute proposal',
+      details: error.message,
+    });
+  }
+};
+
+
+// ============================================================================
+// UTILITY CONTROLLERS
+// ============================================================================
+
+/**
+ * @route GET /api/governance/proposals/:proposalId/execution-readiness
+ * @desc Get detailed execution readiness report
+ * @access Public
+ */
+export const getExecutionReadinessController = async (req: Request, res: Response) => {
+  try {
+    const { proposalId } = req.params;
+
+    const proposalIdNum = parseInt(proposalId);
+    if (isNaN(proposalIdNum) || proposalIdNum < 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid proposal ID',
+      });
+    }
+
+    const result = await getExecutionReadinessReport(proposalIdNum);
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error: any) {
+    console.error('Error in getExecutionReadinessController:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to get execution readiness',
+      details: error.message,
+    });
+  }
+};
+
+/**
+ * @route GET /api/governance/proposals/:proposalId/execution-preview
+ * @desc Preview what a proposal will do when executed
+ * @access Public
+ */
+export const getExecutionPreviewController = async (req: Request, res: Response) => {
+  try {
+    const { proposalId } = req.params;
+
+    const proposalIdNum = parseInt(proposalId);
+    if (isNaN(proposalIdNum) || proposalIdNum < 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid proposal ID',
+      });
+    }
+
+    const result = await getProposalExecutionPreview(proposalIdNum);
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error: any) {
+    console.error('Error in getExecutionPreviewController:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to get execution preview',
+      details: error.message,
+    });
+  }
+};
+
+/**
+ * @route POST /api/governance/proposals/bulk-execute
+ * @desc Execute all ready proposals
+ * @access Admin
+ */
+export const bulkExecuteController = async (req: Request, res: Response) => {
+  try {
+    const { maxProposalId = 10, walletNumber } = req.body;
+
+    let userKeypair = undefined;
+    const walletNum = Number(walletNumber) || null;
+    if (walletNum && walletNum >= 1 && walletNum <= 10) {
+      userKeypair = getMockWalletKeypair(walletNum);
+    }
+
+    const result = await bulkExecuteReadyProposals(maxProposalId, userKeypair);
+
+    return res.status(200).json({
+      success: true,
+      message: `Executed ${result.executedCount} proposals`,
+      data: result,
+      walletNumber: walletNum || 'admin',
+    });
+  } catch (error: any) {
+    console.error('Error in bulkExecuteController:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to bulk execute proposals',
+      details: error.message,
+    });
+  }
+};
+
+/**
+ * @route GET /api/governance/proposals/execution-schedule
+ * @desc Get schedule of when proposals become executable
+ * @access Public
+ */
+export const getExecutionScheduleController = async (req: Request, res: Response) => {
+  try {
+    const maxProposalId = Number(req.query.maxProposalId) || 10;
+
+    const result = await getExecutionSchedule(maxProposalId);
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error: any) {
+    console.error('Error in getExecutionScheduleController:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to get execution schedule',
+      details: error.message,
+    });
+  }
+};
+
+
+/**
+ * @route GET /api/governance/treasury/admin-account
+ * @desc Get admin's treasury account address
+ * @access Public
+ */
+export const getAdminTreasuryController = async (req: Request, res: Response) => {
+  try {
+    const result = await getAdminTreasuryAccount();
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error: any) {
+    console.error('Error in getAdminTreasuryController:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to get admin treasury account',
+      details: error.message,
+    });
+  }
+};
+
+// =========================================================================
+// TREASURY CONTROLLERS
+// =========================================================================
+
+export const initializeTreasuryController = async (req: Request, res: Response) => {
+  try {
+    const result = await initializeTreasury();
+    return res.status(200).json({
+      success: true,
+      message: 'Treasury initialized',
+      data: result,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to initialize treasury',
+      details: error.message,
+    });
+  }
+};
+
+export const fundTreasuryController = async (req: Request, res: Response) => {
+  try {
+    const { amount } = req.body || {};
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      return res.status(400).json({ success: false, error: 'Valid positive amount is required' });
+    }
+
+    const result = await fundTreasury(amt);
+    return res.status(200).json({ success: true, data: result });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fund treasury',
+      details: error.message,
+    });
+  }
+};
+
+export const getTreasuryAccountController = async (req: Request, res: Response) => {
+  try {
+    const result = await getTreasuryAccount();
+    return res.status(200).json({ success: true, data: result });
+  } catch (error: any) {
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to get treasury account',
+      details: error.message,
+    });
+  }
+};
+
+// ============================================================================
+// EXECUTION DATA BUILDER CONTROLLERS
+// ============================================================================
+
+/**
+ * @route POST /api/governance/execution-data/treasury
+ * @desc Build execution data for treasury transfer
+ * @access Public
+ */
+export const buildTreasuryExecutionDataController = async (req: Request, res: Response) => {
+  try {
+    const { recipientAddress, amountMicroTokens } = req.body;
+
+    if (!recipientAddress || !amountMicroTokens) {
+      return res.status(400).json({
+        success: false,
+        error: 'recipientAddress and amountMicroTokens are required',
+      });
+    }
+
+    const executionData = buildTreasuryTransferExecutionData(
+      recipientAddress,
+      Number(amountMicroTokens)
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        executionData,
+        length: executionData.length,
+        recipient: recipientAddress,
+        amountMicroTokens: Number(amountMicroTokens),
+        amountTokens: Number(amountMicroTokens) / 1_000_000,
+      },
+    });
+  } catch (error: any) {
+    console.error('Error in buildTreasuryExecutionDataController:', error);
+    return res.status(400).json({
+      success: false,
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @route POST /api/governance/execution-data/parameter
+ * @desc Build execution data for parameter update
+ * @access Public
+ */
+export const buildParameterExecutionDataController = async (req: Request, res: Response) => {
+  try {
+    const { parameterId, newValue } = req.body;
+
+    if (parameterId === undefined || newValue === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: 'parameterId and newValue are required',
+      });
+    }
+
+    const executionData = buildParameterUpdateExecutionData(
+      Number(parameterId),
+      Number(newValue)
+    );
+
+    const paramNames = ['Quorum Percentage', 'Passing Threshold', 'Timelock Duration'];
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        executionData,
+        length: executionData.length,
+        parameterId: Number(parameterId),
+        parameterName: paramNames[Number(parameterId)],
+        newValue: Number(newValue),
+      },
+    });
+  } catch (error: any) {
+    console.error('Error in buildParameterExecutionDataController:', error);
+    return res.status(400).json({
+      success: false,
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @route POST /api/governance/execution-data/decode/treasury
+ * @desc Decode treasury transfer execution data
+ * @access Public
+ */
+export const decodeTreasuryExecutionDataController = async (req: Request, res: Response) => {
+  try {
+    const { executionData } = req.body;
+
+    if (!executionData || !Array.isArray(executionData)) {
+      return res.status(400).json({
+        success: false,
+        error: 'executionData array is required',
+      });
+    }
+
+    const decoded = decodeTreasuryTransferExecutionData(executionData);
+
+    return res.status(200).json({
+      success: true,
+      data: decoded,
+    });
+  } catch (error: any) {
+    console.error('Error in decodeTreasuryExecutionDataController:', error);
+    return res.status(400).json({
+      success: false,
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @route POST /api/governance/execution-data/decode/parameter
+ * @desc Decode parameter update execution data
+ * @access Public
+ */
+export const decodeParameterExecutionDataController = async (req: Request, res: Response) => {
+  try {
+    const { executionData } = req.body;
+
+    if (!executionData || !Array.isArray(executionData)) {
+      return res.status(400).json({
+        success: false,
+        error: 'executionData array is required',
+      });
+    }
+
+    const decoded = decodeParameterUpdateExecutionData(executionData);
+
+    return res.status(200).json({
+      success: true,
+      data: decoded,
+    });
+  } catch (error: any) {
+    console.error('Error in decodeParameterExecutionDataController:', error);
+    return res.status(400).json({
+      success: false,
+      error: error.message,
     });
   }
 };
