@@ -21,6 +21,8 @@ import { StakingPool, UserStakingAccount, GovernanceAccount, VoteRecord, VoteCho
 
 // Helper function to get the program
 export const getProgram = () => {
+    // Clear the cached IDL - CRITICAL for updates
+    delete require.cache[require.resolve("./idl.json")];
   const idl = require("./idl.json");
   const walletKeypair = require("./ZSNIPE_Admin-wallet-keypair.json");
 
@@ -88,6 +90,8 @@ const PROPOSAL_SEED = "proposalV1";
 const PROPOSAL_ESCROW_SEED = "proposal_escrowV1";
 
 const VOTE_SEED = "voteV1";
+const GOVERNANCE_CONFIG_SEED = "governance_configV1";
+const TREASURY_SEED = "treasuryV1";
 
 // // Governance constants
 const MIN_STAKE_DURATION_FOR_VOTING = 0 * 86400; // 30 days in seconds
@@ -156,6 +160,20 @@ export function getProposalEscrowPda(programId: PublicKey): [PublicKey, number] 
   );
 }
 
+export function getGovernanceConfigPda(programId: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(GOVERNANCE_CONFIG_SEED)],
+    programId
+  );
+}
+
+export function getTreasuryPda(programId: PublicKey, stakingPool: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(TREASURY_SEED), stakingPool.toBuffer()],
+    programId
+  );
+}
+
 export function getVoteRecordPda(
   programId: PublicKey, 
   proposalId: number, 
@@ -168,6 +186,15 @@ export function getVoteRecordPda(
     [Buffer.from(VOTE_SEED), proposalIdBuffer, voterPublicKey.toBuffer()],
     programId
   );
+}
+
+function getProposalTypeEnum(proposalType: number) {
+  switch (proposalType) {
+    case 0: return { text: {} };
+    case 1: return { treasuryTransfer: {} };
+    case 2: return { parameterUpdate: {} };
+    default: throw new Error(`Invalid proposal type: ${proposalType}`);
+  }
 }
 
 
@@ -227,6 +254,56 @@ export async function initializeStakingPool() {
     throw error;
   }
 }
+
+// Add to helpers.ts
+export async function initializeTreasury() {
+  const { program, adminKeypair } = getProgram();
+
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [programAuthority] = getProgramAuthorityPda(program.programId);
+  const [treasuryAccount] = getTreasuryPda(program.programId, stakingPool);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  console.log("Initializing treasury account...");
+  console.log(`Treasury PDA: ${treasuryAccount.toString()}`);
+  console.log(`Program Authority: ${programAuthority.toString()}`);
+
+  try {
+    const tx = await program.methods
+      .initializeTreasury()
+      .accounts({
+        admin: adminKeypair.publicKey,
+        stakingPool: stakingPool,
+        programAuthority: programAuthority,
+        treasuryAccount: treasuryAccount,
+        tokenMint: tokenMintAddress,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+      })
+      .signers([adminKeypair])
+      .rpc();
+
+    console.log("✅ Treasury initialized successfully!");
+    console.log(`Transaction: ${tx}`);
+
+    return {
+      success: true,
+      transactionId: tx,
+      treasuryAccount: treasuryAccount.toString(),
+      programAuthority: programAuthority.toString(),
+    };
+  } catch (error) {
+    console.error("Error initializing treasury:", error);
+    throw error;
+  }
+}
+
+  
 
 // === Stake Tokens ===
 export async function stakeTokens(amount: number, userKeypair?: Keypair) {
@@ -288,6 +365,8 @@ export async function stakeTokens(amount: number, userKeypair?: Keypair) {
   }
 
   try {
+
+    
     const tx = await program.methods
       .stake(new anchor.BN(amount * Math.pow(10, 6)))
       .accounts({
@@ -681,7 +760,7 @@ export async function getUserStakingInfo(userKeypair?: Keypair) {
     // Return properly serialized data
     return {
       staker: stakingInfo.staker.toString(),
-      stakedAmount: stakingInfo.stakedAmount.toNumber(),
+      stakedAmount: stakingInfo.stakedAmount.toNumber()/1_000_000,
       timestamp: stakingInfo.timestamp.toNumber(),
       lastUpdated: stakingInfo.lastUpdated.toNumber(),
       bump: stakingInfo.bump,
@@ -942,7 +1021,7 @@ export async function createProposal(
   description: string,
   proposalType: number, // 0=Text, 1=TreasuryTransfer, 2=ParameterUpdate
   executionData: number[], // Array of bytes
-  votingPeriod: number, // 3, 7, or 14 days
+  votingPeriod: number, // 0 (short), 1 (medium), or 2 (long)
   userKeypair?: Keypair
 ) {
   const { program, connection, adminKeypair } = getProgram();
@@ -1016,8 +1095,8 @@ export async function createProposal(
   if (executionData.length > 500) {
     throw new Error("Execution data too large (max 500 bytes)");
   }
-  if (![3, 7, 14].includes(votingPeriod)) {
-    throw new Error("Voting period must be 3, 7, or 14 days");
+  if (![0, 1, 2].includes(votingPeriod)) {
+    throw new Error("Voting period must be 0 (short), 1 (medium), or 2 (long)");
   }
 
   console.log("All validations passed, creating proposal...");
@@ -1028,7 +1107,7 @@ export async function createProposal(
         new anchor.BN(proposalId),
         title,
         description,
-        { text: {} }, // ProposalType enum - adjust based on proposalType param
+        getProposalTypeEnum(proposalType), // ProposalType enum - adjust based on proposalType param
         Buffer.from(executionData),
         votingPeriod
       )
@@ -1137,6 +1216,7 @@ export async function getProposalInfo(proposalId: number) {
       depositAmount: Number(proposalData.depositAmount) / 1_000_000,
       depositRefunded: proposalData.depositRefunded,
       proposalAccount: proposalAccount.toString(),
+      executionData: proposalData.executionData, // Add this line
     };
   } catch (error) {
     console.error(`Error fetching proposal #${proposalId}:`, error);
@@ -1406,4 +1486,1207 @@ export async function bulkCastVote(
     voteChoice: VoteChoice[voteChoice],
     results: results,
   };
+}
+
+// Add this to your helpers.ts file
+
+// === Finalize Proposal ===
+export async function finalizeProposal(
+  proposalId: number,
+  userKeypair?: Keypair
+) {
+  const { program, adminKeypair } = getProgram();
+  const finalizer = userKeypair || adminKeypair;
+
+  console.log(`Finalizing proposal #${proposalId} by ${finalizer.publicKey.toString()}`);
+
+  // Get all required PDAs
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [programAuthority] = getProgramAuthorityPda(program.programId);
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+  const [depositEscrowAccount] = getProposalEscrowPda(program.programId);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  // Pre-flight checks
+  try {
+    // Check if proposal exists
+    const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    const status = Object.keys(proposalData.status)[0];
+
+    // Convert BN to numbers FIRST
+    const votingEndsAtNum = typeof proposalData.votingEndsAt === 'number' 
+      ? proposalData.votingEndsAt 
+      : Number(proposalData.votingEndsAt);
+
+    const finalizedAtNum = typeof proposalData.finalizedAt === 'number'
+      ? proposalData.finalizedAt
+      : Number(proposalData.finalizedAt);
+
+    console.log(`Proposal status: ${status}`);
+    console.log(`Voting ends at: ${new Date(votingEndsAtNum * 1000)}`);
+
+    // Check if proposal is still active
+    if (status !== 'active') {
+      throw new Error(`Proposal is not active. Current status: ${status}`);
+    }
+
+    // Check if voting period has ended
+    const currentTime = Math.floor(Date.now() / 1000);
+    if (currentTime < votingEndsAtNum) {  // Use converted number
+      const timeRemaining = votingEndsAtNum - currentTime;
+      const hoursRemaining = Math.floor(timeRemaining / 3600);
+      const minutesRemaining = Math.floor((timeRemaining % 3600) / 60);
+      throw new Error(
+        `Voting period has not ended yet. ${hoursRemaining}h ${minutesRemaining}m remaining`
+      );
+    }
+
+// Check if already finalized
+if (finalizedAtNum !== 0) {  // Use converted number
+  throw new Error("Proposal has already been finalized");
+}
+
+    // Get proposer's token account for potential deposit refund
+    const proposerTokenAccount = getAssociatedTokenAddressSync(
+      tokenMintAddress,
+      new PublicKey(proposalData.proposer),
+      false,
+      TOKEN_2022_PROGRAM_ID
+    );
+
+    console.log("All validations passed, finalizing proposal...");
+    console.log(`Vote counts - Yes: ${proposalData.yesVotes.toString()}, No: ${proposalData.noVotes.toString()}, Abstain: ${proposalData.abstainVotes.toString()}`);
+
+    try {
+      const tx = await program.methods
+        .finalizeProposal()
+        .accounts({
+          finalizer: finalizer.publicKey,
+          proposalAccount: proposalAccount,
+          stakingPool: stakingPool,
+          programAuthority: programAuthority,
+          depositEscrowAccount: depositEscrowAccount,
+          proposerTokenAccount: proposerTokenAccount,
+          tokenMint: tokenMintAddress,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
+        })
+        .signers([finalizer])
+        .rpc();
+
+      console.log(`✅ Proposal #${proposalId} finalized successfully!`);
+      console.log(`Transaction: ${tx}`);
+
+// Fetch updated proposal to show final results
+    const updatedProposal = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    const finalStatus = Object.keys(updatedProposal.status)[0];
+
+    // Convert BN to numbers
+    const finalizedAtNum = typeof updatedProposal.finalizedAt === 'number'
+      ? updatedProposal.finalizedAt
+      : Number(updatedProposal.finalizedAt);
+
+    const timelockEndNum = typeof updatedProposal.timelockEnd === 'number'
+      ? updatedProposal.timelockEnd
+      : Number(updatedProposal.timelockEnd);
+
+    console.log(`Final status: ${finalStatus}`);
+    console.log(`Finalized at: ${new Date(finalizedAtNum * 1000)}`);
+
+    if (finalStatus === 'passed') {
+      console.log(`Timelock ends at: ${new Date(timelockEndNum * 1000)}`);
+    }
+
+    if (updatedProposal.depositRefunded) {
+      console.log(`Deposit refunded: ${updatedProposal.depositAmount / 1_000_000} ZSNIPE`);
+    }
+
+    return {
+      success: true,
+      transactionId: tx,
+      proposalId: proposalId,
+      finalStatus: finalStatus,
+      finalizedAt: finalizedAtNum,  // Use converted number
+      timelockEnd: timelockEndNum !== 0 ? timelockEndNum : null,  // Use converted number
+      depositRefunded: updatedProposal.depositRefunded,
+      votes: {
+        yes: updatedProposal.yesVotes.toString(),
+        no: updatedProposal.noVotes.toString(),
+        abstain: updatedProposal.abstainVotes.toString(),
+        totalVoters: updatedProposal.totalVoters,
+      },
+    };
+    } catch (error) {
+      console.error("Error finalizing proposal:", error);
+      throw error;
+    }
+  } catch (error: any) {
+    if (error.message && error.message.includes("Account does not exist")) {
+      throw new Error(`Proposal #${proposalId} does not exist`);
+    }
+    throw error;
+  }
+}
+
+// === Get Proposal Finalization Status (helper) ===
+export async function getProposalFinalizationStatus(proposalId: number) {
+  const { program } = getProgram();
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+
+  try {
+    const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    const currentTime = Math.floor(Date.now() / 1000);
+    const status = Object.keys(proposalData.status)[0];
+
+    // CRITICAL FIX: Convert BN to number
+    const votingEndsAtNum = typeof proposalData.votingEndsAt === 'number' 
+      ? proposalData.votingEndsAt 
+      : Number(proposalData.votingEndsAt);
+    
+    const finalizedAtNum = typeof proposalData.finalizedAt === 'number'
+      ? proposalData.finalizedAt
+      : Number(proposalData.finalizedAt);
+
+    const canFinalize = 
+      status === 'active' && 
+      currentTime >= votingEndsAtNum &&
+      finalizedAtNum === 0;
+
+    const timeUntilVotingEnds = votingEndsAtNum - currentTime;
+    const isVotingEnded = timeUntilVotingEnds <= 0;
+
+    console.log(`=== Finalization Status for Proposal #${proposalId} ===`);
+    console.log(`Current Status: ${status}`);
+    console.log(`Voting Ended: ${isVotingEnded}`);
+    console.log(`Already Finalized: ${finalizedAtNum !== 0}`);
+    console.log(`Can Finalize: ${canFinalize}`);
+
+    if (!isVotingEnded) {
+      const hoursRemaining = Math.floor(timeUntilVotingEnds / 3600);
+      const minutesRemaining = Math.floor((timeUntilVotingEnds % 3600) / 60);
+      console.log(`Time until voting ends: ${hoursRemaining}h ${minutesRemaining}m`);
+    }
+
+    return {
+      success: true,
+      proposalId: proposalId,
+      currentStatus: status,
+      canFinalize: canFinalize,
+      votingEnded: isVotingEnded,
+      alreadyFinalized: finalizedAtNum !== 0,
+      votingEndsAt: votingEndsAtNum,
+      finalizedAt: finalizedAtNum !== 0 ? finalizedAtNum : null,
+      timeUntilVotingEnds: !isVotingEnded ? timeUntilVotingEnds : 0,
+      votes: {
+        yes: proposalData.yesVotes.toString(),
+        no: proposalData.noVotes.toString(),
+        abstain: proposalData.abstainVotes.toString(),
+        totalVoters: proposalData.totalVoters,
+      },
+    };
+  } catch (error: any) {
+    if (error.message && error.message.includes("Account does not exist")) {
+      throw new Error(`Proposal #${proposalId} does not exist`);
+    }
+    throw error;
+  }
+}
+
+// Add this after the finalizeProposal function
+
+// === Execute Proposal ===
+export async function executeProposal(
+  proposalId: number,
+  userKeypair?: Keypair,
+  treasuryAccount?: PublicKey,
+  recipientAccount?: PublicKey,
+  governanceConfigPda?: PublicKey
+) {
+  const { program, adminKeypair } = getProgram();
+  const executor = userKeypair || adminKeypair;
+
+  console.log(`Executing proposal #${proposalId} by ${executor.publicKey.toString()}`);
+
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [programAuthority] = getProgramAuthorityPda(program.programId);
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+  const [depositEscrowAccount] = getProposalEscrowPda(program.programId);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  try {
+    const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    const status = Object.keys(proposalData.status)[0];
+    const proposalType = Object.keys(proposalData.proposalType)[0];
+
+    // Convert BN to numbers
+    const timelockEndNum = typeof proposalData.timelockEnd === 'number'
+      ? proposalData.timelockEnd
+      : Number(proposalData.timelockEnd);
+
+    const executedAtNum = typeof proposalData.executedAt === 'number'
+      ? proposalData.executedAt
+      : Number(proposalData.executedAt);
+
+    console.log(`Proposal status: ${status}`);
+    console.log(`Proposal type: ${proposalType}`);
+    console.log(`Timelock ends at: ${new Date(timelockEndNum * 1000)}`);
+
+    if (status !== 'passed') {
+      throw new Error(`Proposal has not passed. Current status: ${status}`);
+    }
+
+    const currentTime = Math.floor(Date.now() / 1000);
+    if (currentTime < timelockEndNum) {
+      const timeRemaining = timelockEndNum - currentTime;
+      const hoursRemaining = Math.floor(timeRemaining / 3600);
+      const minutesRemaining = Math.floor((timeRemaining % 3600) / 60);
+      throw new Error(
+        `Timelock has not expired yet. ${hoursRemaining}h ${minutesRemaining}m remaining`
+      );
+    }
+
+    if (executedAtNum !== 0) {
+      throw new Error("Proposal has already been executed");
+    }
+
+    const proposerTokenAccount = getAssociatedTokenAddressSync(
+      tokenMintAddress,
+      new PublicKey(proposalData.proposer),
+      false,
+      TOKEN_2022_PROGRAM_ID
+    );
+
+    console.log("All validations passed, executing proposal...");
+
+    // BUILD BASE ACCOUNTS - Required for all proposal types
+    const [governanceConfig] = getGovernanceConfigPda(program.programId);
+
+    const accounts: any = {
+      executor: executor.publicKey,
+      proposalAccount: proposalAccount,
+      stakingPool: stakingPool,
+      programAuthority: programAuthority,
+      depositEscrowAccount: depositEscrowAccount,
+      proposerTokenAccount: proposerTokenAccount,
+      depositTokenMint: tokenMintAddress,
+      tokenProgramForDeposit: TOKEN_2022_PROGRAM_ID,
+      governanceConfig: governanceConfig,
+        // Explicitly set optional accounts to null for non-treasury proposals
+      treasuryAccount: null,
+      recipientAccount: null,
+      tokenMint: null,
+      tokenProgram: null,
+    };
+
+    // Only override with actual values for treasury transfers
+    if (proposalType === 'treasuryTransfer') {
+      if (!treasuryAccount || !recipientAccount) {
+        throw new Error("Treasury and recipient accounts required for TreasuryTransfer proposals");
+      }
+      accounts.treasuryAccount = treasuryAccount;
+      accounts.recipientAccount = recipientAccount;
+      accounts.tokenMint = tokenMintAddress;
+      accounts.tokenProgram = TOKEN_2022_PROGRAM_ID;
+    }
+    // For 'parameterUpdate' and 'text' proposals, don't add treasury-specific accounts
+
+    try {
+      const tx = await program.methods
+        .executeProposal()
+        .accounts(accounts)
+        .signers([executor])
+        .rpc();
+
+      console.log(`✅ Proposal #${proposalId} executed successfully!`);
+      console.log(`Transaction: ${tx}`);
+
+      const updatedProposal = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+      const finalStatus = Object.keys(updatedProposal.status)[0];
+
+      const executedAtNum = typeof updatedProposal.executedAt === 'number'
+        ? updatedProposal.executedAt
+        : Number(updatedProposal.executedAt);
+
+      console.log(`Final status: ${finalStatus}`);
+      console.log(`Executed at: ${new Date(executedAtNum * 1000)}`);
+      console.log(`Deposit refunded: ${updatedProposal.depositRefunded ? 'Yes' : 'No'}`);
+
+      return {
+        success: true,
+        transactionId: tx,
+        proposalId: proposalId,
+        finalStatus: finalStatus,
+        executedAt: executedAtNum,
+        depositRefunded: updatedProposal.depositRefunded,
+        depositAmount: updatedProposal.depositAmount / 1_000_000,
+      };
+    } catch (error) {
+      console.error("Error executing proposal:", error);
+      throw error;
+    }
+  } catch (error: any) {
+    if (error.message && error.message.includes("Account does not exist")) {
+      throw new Error(`Proposal #${proposalId} does not exist`);
+    }
+    throw error;
+  }
+}
+// === Get Proposal Execution Status (helper) ===
+export async function getProposalExecutionStatus(proposalId: number) {
+  const { program } = getProgram();
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+
+  try {
+    const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    const currentTime = Math.floor(Date.now() / 1000);
+    const status = Object.keys(proposalData.status)[0];
+
+    // Convert BN to numbers
+    const timelockEndNum = typeof proposalData.timelockEnd === 'number'
+      ? proposalData.timelockEnd
+      : Number(proposalData.timelockEnd);
+
+    const executedAtNum = typeof proposalData.executedAt === 'number'
+      ? proposalData.executedAt
+      : Number(proposalData.executedAt);
+
+    const canExecute =
+      status === 'passed' &&
+      currentTime >= timelockEndNum &&
+      executedAtNum === 0;
+
+    const timeUntilTimelockEnds = timelockEndNum - currentTime;
+    const isTimelockExpired = timeUntilTimelockEnds <= 0;
+
+    console.log(`=== Execution Status for Proposal #${proposalId} ===`);
+    console.log(`Current Status: ${status}`);
+    console.log(`Timelock Expired: ${isTimelockExpired}`);
+    console.log(`Already Executed: ${executedAtNum !== 0}`);
+    console.log(`Can Execute: ${canExecute}`);
+
+    if (!isTimelockExpired && status === 'passed') {
+      const hoursRemaining = Math.floor(timeUntilTimelockEnds / 3600);
+      const minutesRemaining = Math.floor((timeUntilTimelockEnds % 3600) / 60);
+      console.log(`Time until timelock expires: ${hoursRemaining}h ${minutesRemaining}m`);
+    }
+
+    return {
+      success: true,
+      proposalId: proposalId,
+      currentStatus: status,
+      canExecute: canExecute,
+      timelockExpired: isTimelockExpired,
+      alreadyExecuted: executedAtNum !== 0,
+      timelockEnd: timelockEndNum,
+      executedAt: executedAtNum !== 0 ? executedAtNum : null,
+      timeUntilTimelockEnds: !isTimelockExpired ? timeUntilTimelockEnds : 0,
+    };
+  } catch (error: any) {
+    if (error.message && error.message.includes("Account does not exist")) {
+      throw new Error(`Proposal #${proposalId} does not exist`);
+    }
+    throw error;
+  }
+}
+
+// === Helper: Calculate Voting Power Calculations ===
+export async function bulkCalculateVotingPower(walletNumbers?: number[]) {
+  const targetWallets = walletNumbers || [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+  const results = [];
+
+  console.log(`Bulk calculating voting power for wallets: ${targetWallets.join(', ')}`);
+
+  for (const walletNum of targetWallets) {
+    try {
+      const wallet = getMockWalletKeypair(walletNum);
+      const result = await calculateVotingPower(wallet);
+      results.push({
+        walletNumber: walletNum,
+        success: true,
+        transactionId: result.transactionId,
+        votingPower: result.votingPower,
+      });
+    } catch (error: any) {
+      results.push({
+        walletNumber: walletNum,
+        success: false,
+        error: error.message,
+      });
+    }
+  }
+
+  return {
+    success: true,
+    operation: 'bulk_calculate_voting_power',
+    results: results,
+  };
+}
+
+// === Get Complete Proposal Lifecycle Status ===
+export async function getCompleteProposalStatus(proposalId: number) {
+  const { program } = getProgram();
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+
+  try {
+    const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    const currentTime = Math.floor(Date.now() / 1000);
+    const status = Object.keys(proposalData.status)[0];
+    const proposalType = Object.keys(proposalData.proposalType)[0];
+
+    // Convert all BN values
+    const createdAtNum = Number(proposalData.createdAt);
+    const votingEndsAtNum = Number(proposalData.votingEndsAt);
+    const finalizedAtNum = Number(proposalData.finalizedAt);
+    const executedAtNum = Number(proposalData.executedAt);
+    const timelockEndNum = Number(proposalData.timelockEnd);
+
+    const lifecycle = {
+      phase: status,
+      isVotingActive: status === 'active' && currentTime < votingEndsAtNum,
+      isVotingEnded: currentTime >= votingEndsAtNum,
+      isFinalized: finalizedAtNum !== 0,
+      isTimelockActive: status === 'passed' && currentTime < timelockEndNum,
+      isTimelockExpired: currentTime >= timelockEndNum,
+      isExecuted: executedAtNum !== 0,
+      canFinalize: status === 'active' && currentTime >= votingEndsAtNum && finalizedAtNum === 0,
+      canExecute: status === 'passed' && currentTime >= timelockEndNum && executedAtNum === 0,
+    };
+
+    return {
+      success: true,
+      proposalId: proposalId,
+      title: proposalData.title,
+      proposer: proposalData.proposer.toString(),
+      type: proposalType,
+      status: status,
+      lifecycle: lifecycle,
+      timestamps: {
+        created: createdAtNum,
+        votingEnds: votingEndsAtNum,
+        finalized: finalizedAtNum || null,
+        timelockEnd: timelockEndNum || null,
+        executed: executedAtNum || null,
+      },
+      votes: {
+        yes: Number(proposalData.yesVotes),
+        no: Number(proposalData.noVotes),
+        abstain: Number(proposalData.abstainVotes),
+        totalVoters: proposalData.totalVoters,
+      },
+      deposit: {
+        amount: Number(proposalData.depositAmount) / 1_000_000,
+        refunded: proposalData.depositRefunded,
+      },
+    };
+  } catch (error: any) {
+    if (error.message && error.message.includes("Account does not exist")) {
+      throw new Error(`Proposal #${proposalId} does not exist`);
+    }
+    throw error;
+  }
+}
+
+
+
+// ============================================================================
+// GOVERNANCE CONFIG INITIALIZATION
+// ============================================================================
+
+export async function initializeGovernanceConfig(userKeypair?: Keypair) {
+  const { program, adminKeypair } = getProgram();
+  const authority = userKeypair || adminKeypair;
+
+  console.log(`Initializing governance config by ${authority.publicKey.toString()}`);
+
+  const [governanceConfig] = getGovernanceConfigPda(program.programId);
+
+  console.log(`Governance Config PDA: ${governanceConfig.toString()}`);
+
+  try {
+    // Check if already initialized
+    try {
+      await program.account.governanceConfig.fetch(governanceConfig);
+      console.log("Governance config already exists");
+      return {
+        success: true,
+        message: "Governance config already initialized",
+        governanceConfig: governanceConfig.toString(),
+        authority: authority.publicKey.toString(),
+      };
+    } catch (error) {
+      // Doesn't exist, proceed with initialization
+    }
+
+    const tx = await program.methods
+      .initializeGovernanceConfig()
+      .accounts({
+        authority: authority.publicKey,
+        governanceConfig: governanceConfig,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    console.log(`✅ Governance config initialized successfully!`);
+    console.log(`Transaction: ${tx}`);
+
+    return {
+      success: true,
+      transactionId: tx,
+      governanceConfig: governanceConfig.toString(),
+      authority: authority.publicKey.toString(),
+    };
+  } catch (error: any) {
+    console.error("Error initializing governance config:", error);
+    return {
+      success: false,
+      error: error.message || "Failed to initialize governance config",
+    };
+  }
+}
+
+// ============================================================================
+// EXECUTION DATA BUILDERS
+// ============================================================================
+
+export function buildTextExecutionData(metadata?: string): number[] {
+  if (!metadata) return [];
+  const encoder = new TextEncoder();
+  return Array.from(encoder.encode(metadata));
+}
+
+export function buildTreasuryTransferExecutionData(
+  recipientAddress: string,
+  amountMicroTokens: number
+): number[] {
+  if (!recipientAddress || amountMicroTokens <= 0) {
+    throw new Error("Invalid treasury transfer parameters");
+  }
+
+  const recipientPubkey = new PublicKey(recipientAddress);
+  const recipientBytes = Array.from(recipientPubkey.toBytes());
+
+  const amountBuffer = Buffer.alloc(8);
+  amountBuffer.writeBigUInt64LE(BigInt(amountMicroTokens));
+  const amountBytes = Array.from(amountBuffer);
+
+  return [...recipientBytes, ...amountBytes];
+}
+
+export function buildParameterUpdateExecutionData(
+  parameterId: number,
+  newValue: number
+): number[] {
+  if (![0, 1, 2].includes(parameterId)) {
+    throw new Error("Parameter ID must be 0 (Quorum), 1 (Threshold), or 2 (Timelock)");
+  }
+
+  // Validate ranges
+  if (parameterId === 0 && (newValue < 1 || newValue > 100)) {
+    throw new Error("Quorum percentage must be between 1 and 100");
+  }
+  if (parameterId === 1 && (newValue < 51 || newValue > 100)) {
+    throw new Error("Passing threshold must be between 51 and 100");
+  }
+  if (parameterId === 2 && newValue > 30 * 86400) {
+    throw new Error("Timelock duration must be <= 30 days (2592000 seconds)");
+  }
+
+  const parameterIdByte = [parameterId];
+  const valueBuffer = Buffer.alloc(8);
+  valueBuffer.writeBigUInt64LE(BigInt(newValue));
+  const valueBytes = Array.from(valueBuffer);
+
+  return [...parameterIdByte, ...valueBytes];
+}
+
+// ============================================================================
+// TEXT PROPOSAL EXECUTION
+// ============================================================================
+
+export async function executeTextProposal(
+  proposalId: number,
+  userKeypair?: Keypair
+) {
+  try {
+    console.log(`\n📝 Executing Text Proposal #${proposalId}...`);
+
+    const statusCheck = await getProposalExecutionStatus(proposalId);
+    if (!statusCheck.canExecute) {
+      return {
+        success: false,
+        proposalId,
+        error: "Proposal not ready for execution",
+        status: statusCheck,
+      };
+    }
+
+    const result = await executeProposal(proposalId, userKeypair);
+
+    console.log(`✅ Text proposal executed successfully`);
+    return {
+      ...result, // Spread result first
+      type: 'text', // Then add/override specific properties
+    };
+  } catch (error: any) {
+    console.error(`❌ Error executing text proposal:`, error.message);
+    return {
+      success: false,
+      type: 'text',
+      proposalId,
+      error: error.message,
+    };
+  }
+}
+// ============================================================================
+// TREASURY TRANSFER EXECUTION
+// ============================================================================
+
+export async function executeTreasuryTransferProposal(
+  proposalId: number,
+  treasuryAccountAddress: string,
+  recipientAccountAddress: string,
+  userKeypair?: Keypair
+) {
+  try {
+    console.log(`\n💰 Executing Treasury Transfer Proposal #${proposalId}...`);
+    console.log(`   Treasury (input): ${treasuryAccountAddress}`);
+    console.log(`   Recipient (input): ${recipientAccountAddress}`);
+
+    const statusCheck = await getProposalExecutionStatus(proposalId);
+    if (!statusCheck.canExecute) {
+      return {
+        success: false,
+        proposalId,
+        error: "Proposal not ready for execution",
+        status: statusCheck,
+      };
+    }
+
+    const proposalInfo = await getProposalInfo(proposalId);
+    const proposalType = Object.keys(proposalInfo.proposalType)[0];
+    if (proposalType !== 'treasuryTransfer') {
+      return {
+        success: false,
+        proposalId,
+        error: `Invalid proposal type. Expected 'treasuryTransfer', got '${proposalType}'`,
+      };
+    }
+
+    const { program, connection } = getProgram();
+
+    const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+    if (!tokenMint) {
+      throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+    }
+    const tokenMintAddress = new PublicKey(tokenMint);
+
+    // If the provided addresses are wallets, convert to ATAs for Token-2022; if already token accounts, keep them
+    const resolveToken2022Account = async (address: string): Promise<PublicKey> => {
+      const pub = new PublicKey(address);
+      const acct = await connection.getAccountInfo(pub);
+      if (acct && acct.owner.equals(TOKEN_2022_PROGRAM_ID)) {
+        return pub;
+      }
+      return getAssociatedTokenAddressSync(
+        tokenMintAddress,
+        pub,
+        false,
+        TOKEN_2022_PROGRAM_ID
+      );
+    };
+
+    const treasuryAccount = await resolveToken2022Account(treasuryAccountAddress);
+    const recipientAccount = await resolveToken2022Account(recipientAccountAddress);
+
+    console.log(`   Resolved Treasury ATA: ${treasuryAccount.toString()}`);
+    console.log(`   Resolved Recipient ATA: ${recipientAccount.toString()}`);
+
+    const result = await executeProposal(
+      proposalId,
+      userKeypair,
+      treasuryAccount,
+      recipientAccount
+    );
+
+    console.log(`✅ Treasury transfer executed successfully`);
+    return {
+      ...result, // Spread result first
+      type: 'treasuryTransfer', // Then add/override specific properties
+      treasury: treasuryAccountAddress,
+      recipient: recipientAccountAddress,
+    };
+  } catch (error: any) {
+    console.error(`❌ Error executing treasury transfer:`, error.message);
+    return {
+      success: false,
+      type: 'treasuryTransfer',
+      proposalId,
+      error: error.message,
+    };
+  }
+}
+// ============================================================================
+// PARAMETER UPDATE EXECUTION
+// ============================================================================
+
+export async function executeParameterUpdateProposal(
+  proposalId: number,
+  userKeypair?: Keypair
+) {
+  try {
+    console.log(`\n⚙️  Executing Parameter Update Proposal #${proposalId}...`);
+
+    const statusCheck = await getProposalExecutionStatus(proposalId);
+    if (!statusCheck.canExecute) {
+      return {
+        success: false,
+        proposalId,
+        error: "Proposal not ready for execution",
+        status: statusCheck,
+      };
+    }
+
+    const proposalInfo = await getProposalInfo(proposalId);
+    const proposalType = Object.keys(proposalInfo.proposalType)[0];
+    if (proposalType !== 'parameterUpdate') {
+      return {
+        success: false,
+        proposalId,
+        error: `Invalid proposal type. Expected 'parameterUpdate', got '${proposalType}'`,
+      };
+    }
+
+    const { program } = getProgram();
+    const [governanceConfig] = getGovernanceConfigPda(program.programId);
+
+    console.log(`   Governance Config: ${governanceConfig.toString()}`);
+
+    const result = await executeProposal(
+      proposalId,
+      userKeypair,
+      undefined,
+      undefined,
+      governanceConfig
+    );
+
+    console.log(`✅ Parameter update executed successfully`);
+    return {
+      ...result, // Spread result first
+      type: 'parameterUpdate', // Then add/override specific properties
+      governanceConfig: governanceConfig.toString(),
+    };
+  } catch (error: any) {
+    console.error(`❌ Error executing parameter update:`, error.message);
+    return {
+      success: false,
+      type: 'parameterUpdate',
+      proposalId,
+      error: error.message,
+    };
+  }
+}
+
+
+// ============================================================================
+// SMART EXECUTION (AUTO-DETECT TYPE)
+// ============================================================================
+
+export async function executeProposalSmart(
+  proposalId: number,
+  options: {
+    userKeypair?: Keypair;
+    treasuryAccount?: string;
+    recipientAccount?: string;
+  } = {}
+) {
+  try {
+    console.log(`\n🤖 Smart Execution for Proposal #${proposalId}...`);
+
+    const proposalInfo = await getProposalInfo(proposalId);
+    const proposalType = Object.keys(proposalInfo.proposalType)[0];
+
+    console.log(`   Detected type: ${proposalType}`);
+
+    switch (proposalType) {
+      case 'text':
+        return await executeTextProposal(proposalId, options.userKeypair);
+
+      case 'treasuryTransfer':
+        if (!options.treasuryAccount || !options.recipientAccount) {
+          return {
+            success: false,
+            proposalId,
+            error: 'Treasury and recipient accounts required for treasury transfer',
+          };
+        }
+        return await executeTreasuryTransferProposal(
+          proposalId,
+          options.treasuryAccount,
+          options.recipientAccount,
+          options.userKeypair
+        );
+
+      case 'parameterUpdate':
+        return await executeParameterUpdateProposal(proposalId, options.userKeypair);
+
+      default:
+        return {
+          success: false,
+          proposalId,
+          error: `Unknown proposal type: ${proposalType}`,
+        };
+    }
+  } catch (error: any) {
+    return {
+      success: false,
+      proposalId,
+      error: error.message,
+    };
+  }
+}
+
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+
+export async function getExecutionReadinessReport(proposalId: number) {
+  try {
+    const [statusCheck, proposalInfo] = await Promise.all([
+      getProposalExecutionStatus(proposalId),
+      getProposalInfo(proposalId),
+    ]);
+
+    const proposalType = Object.keys(proposalInfo.proposalType)[0];
+
+    const report = {
+      proposalId,
+      title: proposalInfo.title,
+      type: proposalType,
+      currentStatus: statusCheck.currentStatus,
+      canExecute: statusCheck.canExecute,
+      checks: {
+        isPassed: statusCheck.currentStatus === 'passed',
+        timelockExpired: statusCheck.timelockExpired,
+        notAlreadyExecuted: !statusCheck.alreadyExecuted,
+      },
+      timeline: {
+        timelockEnd: statusCheck.timelockEnd,
+        timelockEndDate: new Date(statusCheck.timelockEnd * 1000).toISOString(),
+        timeUntilExecutable: statusCheck.timeUntilTimelockEnds,
+        hoursUntilExecutable: Math.ceil(statusCheck.timeUntilTimelockEnds / 3600),
+        isExecutableNow: statusCheck.canExecute,
+      },
+      requiredAccounts: getRequiredAccountsForType(proposalType),
+      votes: proposalInfo.votes,
+    };
+
+    console.log('\n📊 Execution Readiness Report');
+    console.log('================================');
+    console.log(`Proposal #${proposalId}: ${proposalInfo.title}`);
+    console.log(`Type: ${proposalType}`);
+    console.log(`Status: ${statusCheck.currentStatus}`);
+    console.log(`Can Execute: ${report.canExecute ? '✅ YES' : '❌ NO'}`);
+
+    if (!report.canExecute) {
+      if (!report.checks.isPassed) {
+        console.log(`   ❌ Proposal has not passed`);
+      }
+      if (!report.checks.timelockExpired) {
+        console.log(`   ⏳ Timelock expires in ${report.timeline.hoursUntilExecutable} hours`);
+      }
+      if (!report.checks.notAlreadyExecuted) {
+        console.log(`   ❌ Proposal already executed`);
+      }
+    }
+
+    return {
+      success: true,
+      ...report,
+    };
+  } catch (error: any) {
+    console.error(`❌ Error generating readiness report:`, error.message);
+    return {
+      success: false,
+      proposalId,
+      error: error.message,
+    };
+  }
+}
+
+function getRequiredAccountsForType(proposalType: string): string[] {
+  switch (proposalType) {
+    case 'text':
+      return ['None - text proposals require no additional accounts'];
+    case 'treasuryTransfer':
+      return ['treasuryAccount', 'recipientAccount'];
+    case 'parameterUpdate':
+      return ['governanceConfig (automatically derived)'];
+    default:
+      return ['Unknown proposal type'];
+  }
+}
+
+export async function bulkExecuteReadyProposals(
+  maxProposalId: number = 10,
+  userKeypair?: Keypair
+) {
+  console.log(`\n🔄 Bulk Executing Ready Proposals (0-${maxProposalId})...`);
+
+  const results = [];
+
+  for (let proposalId = 0; proposalId <= maxProposalId; proposalId++) {
+    try {
+      const statusCheck = await getProposalExecutionStatus(proposalId);
+
+      if (statusCheck.canExecute) {
+        console.log(`\n   Found executable proposal #${proposalId}`);
+        const result = await executeProposalSmart(proposalId, { userKeypair });
+        results.push(result);
+      }
+    } catch (error) {
+      // Proposal doesn't exist, skip
+      continue;
+    }
+  }
+
+  console.log(`\n✅ Bulk execution complete. Executed ${results.length} proposals.`);
+
+  return {
+    success: true,
+    executedCount: results.length,
+    results,
+  };
+}
+
+export async function getExecutionSchedule(maxProposalId: number = 10) {
+  console.log(`\n📅 Getting Execution Schedule (0-${maxProposalId})...`);
+
+  const schedule = [];
+
+  for (let proposalId = 0; proposalId <= maxProposalId; proposalId++) {
+    try {
+      const statusCheck = await getProposalExecutionStatus(proposalId);
+      const proposalInfo = await getProposalInfo(proposalId);
+
+      if (statusCheck.currentStatus === 'passed' && !statusCheck.alreadyExecuted) {
+        schedule.push({
+          proposalId,
+          title: proposalInfo.title,
+          canExecuteNow: statusCheck.canExecute,
+          timelockEnd: statusCheck.timelockEnd,
+          executableAt: new Date(statusCheck.timelockEnd * 1000).toISOString(),
+          hoursUntilExecutable: Math.ceil(statusCheck.timeUntilTimelockEnds / 3600),
+        });
+      }
+    } catch (error) {
+      // Proposal doesn't exist, skip
+      continue;
+    }
+  }
+
+  // Sort by execution time
+  schedule.sort((a, b) => a.timelockEnd - b.timelockEnd);
+
+  console.log('\n📋 Execution Schedule');
+  console.log('=====================');
+  schedule.forEach((item) => {
+    const status = item.canExecuteNow
+      ? '✅ Ready Now'
+      : `⏳ ${item.hoursUntilExecutable}h`;
+    console.log(`#${item.proposalId}: ${item.title.substring(0, 40)}... - ${status}`);
+  });
+
+  return {
+    success: true,
+    count: schedule.length,
+    schedule,
+  };
+}
+
+// ============================================================================
+// HELPER: Get Admin Token Account (for treasury transfers)
+// ============================================================================
+
+export async function getAdminTreasuryAccount() {
+  const { adminKeypair } = getProgram();
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+
+  const tokenMintAddress = new PublicKey(tokenMint);
+  const adminTokenAccount = getAssociatedTokenAddressSync(
+    tokenMintAddress,
+    adminKeypair.publicKey,
+    false,
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  return {
+    address: adminTokenAccount.toString(),
+    publicKey: adminTokenAccount,
+  };
+}
+
+export async function fundTreasury(amount: number) {
+  const { program, connection, adminKeypair } = getProgram();
+
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [treasuryAccount] = getTreasuryPda(program.programId, stakingPool);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  // Admin's token account
+  const adminTokenAccount = getAssociatedTokenAddressSync(
+    tokenMintAddress,
+    adminKeypair.publicKey,
+    false,
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  console.log(`Funding treasury with ${amount} ZSNIPE...`);
+  console.log(`From: ${adminTokenAccount.toString()}`);
+  console.log(`To: ${treasuryAccount.toString()}`);
+
+  // Use standard SPL token transfer
+  const { transfer } = await import("@solana/spl-token");
+  
+  try {
+    const signature = await transfer(
+      connection,
+      adminKeypair,
+      adminTokenAccount,
+      treasuryAccount,
+      adminKeypair,
+      amount * 1_000_000,
+      [],
+      undefined,
+      TOKEN_2022_PROGRAM_ID
+    );
+
+    console.log(`✅ Treasury funded successfully!`);
+    console.log(`Transaction: ${signature}`);
+
+    return {
+      success: true,
+      transactionId: signature,
+      amount: amount,
+      treasuryAccount: treasuryAccount.toString(),
+    };
+  } catch (error) {
+    console.error("Error funding treasury:", error);
+    throw error;
+  }
+}
+
+
+export async function getTreasuryAccount() {
+  const { program } = getProgram();
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [treasuryAccount] = getTreasuryPda(program.programId, stakingPool);
+
+  return {
+    address: treasuryAccount.toString(),
+    publicKey: treasuryAccount,
+  };
+}
+
+// ============================================================================
+// DECODE EXECUTION DATA (for previewing what a proposal will do)
+// ============================================================================
+
+export function decodeTreasuryTransferExecutionData(executionData: number[]) {
+  if (executionData.length !== 40) {
+    throw new Error(`Invalid treasury transfer data length: ${executionData.length}`);
+  }
+
+  const recipientBytes = executionData.slice(0, 32);
+  const recipient = new PublicKey(Buffer.from(recipientBytes));
+
+  const amountBytes = Buffer.from(executionData.slice(32, 40));
+  const amount = Number(amountBytes.readBigUInt64LE(0));
+
+  return {
+    recipient: recipient.toString(),
+    amountMicroTokens: amount,
+    amountTokens: amount / 1_000_000,
+  };
+}
+
+export function decodeParameterUpdateExecutionData(executionData: number[]) {
+  if (executionData.length !== 9) {
+    throw new Error(`Invalid parameter update data length: ${executionData.length}`);
+  }
+
+  const parameterId = executionData[0];
+  const valueBytes = Buffer.from(executionData.slice(1, 9));
+  const value = Number(valueBytes.readBigUInt64LE(0));
+
+  const paramNames = [
+    "Quorum Percentage",
+    "Passing Threshold",
+    "Timelock Duration (seconds)",
+  ];
+  const paramName = paramNames[parameterId] || "Unknown";
+
+  return {
+    parameterId,
+    parameterName: paramName,
+    newValue: value,
+  };
+}
+
+export async function getProposalExecutionPreview(proposalId: number) {
+  try {
+    const proposalInfo = await getProposalInfo(proposalId);
+    const proposalType = Object.keys(proposalInfo.proposalType)[0];
+    const executionData = proposalInfo.executionData; // Now this property exists
+
+    const preview: any = {
+      proposalId,
+      title: proposalInfo.title,
+      type: proposalType,
+      status: Object.keys(proposalInfo.status)[0],
+    };
+
+    if (proposalType === 'treasuryTransfer' && executionData && executionData.length > 0) {
+      const decoded = decodeTreasuryTransferExecutionData(executionData);
+      preview.action = {
+        type: 'Transfer tokens from treasury',
+        recipient: decoded.recipient,
+        amount: `${decoded.amountTokens} ZSNIPE (${decoded.amountMicroTokens} micro-tokens)`,
+      };
+    } else if (proposalType === 'parameterUpdate' && executionData && executionData.length > 0) {
+      const decoded = decodeParameterUpdateExecutionData(executionData);
+      preview.action = {
+        type: 'Update governance parameter',
+        parameter: decoded.parameterName,
+        newValue: decoded.newValue,
+      };
+    } else if (proposalType === 'text') {
+      preview.action = {
+        type: 'No on-chain execution',
+        note: 'Text proposal is for signaling only',
+      };
+    }
+
+    return { success: true, ...preview };
+  } catch (error: any) {
+    return { success: false, proposalId, error: error.message };
+  }
 }

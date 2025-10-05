@@ -11,7 +11,8 @@ import * as anchor from "@coral-xyz/anchor";
 import { 
   ASSOCIATED_TOKEN_PROGRAM_ID, 
   TOKEN_2022_PROGRAM_ID, 
-  getAssociatedTokenAddressSync 
+  getAssociatedTokenAddressSync,
+  createTransferInstruction
 } from "@solana/spl-token";
 
 import { StakingPool, UserStakingAccount, GovernanceAccount, VoteRecord, VoteChoice, ProposalInfo } from "../types";
@@ -54,6 +55,8 @@ const GOVERNANCE_SEED = "governanceV1";
 const PROPOSAL_SEED = "proposalV1";
 const PROPOSAL_ESCROW_SEED = "proposal_escrowV1";
 const VOTE_SEED = "voteV1";
+const TREASURY_SEED = "treasuryV1";
+const GOVERNANCE_CONFIG_SEED = "governance_configV1";
 
 // Governance constants
 const MIN_STAKE_DURATION_FOR_VOTING = 0 * 86400; // 30 days in seconds
@@ -97,6 +100,13 @@ export function getGovernancePda(programId: PublicKey, userPublicKey: PublicKey)
   );
 }
 
+export function getGovernanceConfigPda(programId: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(GOVERNANCE_CONFIG_SEED)],
+    programId
+  );
+} 
+
 export function getProposalPda(programId: PublicKey, proposalId: number): [PublicKey, number] {
   const proposalIdBuffer = Buffer.alloc(8);
   proposalIdBuffer.writeBigUInt64LE(BigInt(proposalId));
@@ -110,6 +120,13 @@ export function getProposalPda(programId: PublicKey, proposalId: number): [Publi
 export function getProposalEscrowPda(programId: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from(PROPOSAL_ESCROW_SEED)],
+    programId
+  );
+}
+
+export function getTreasuryPda(programId: PublicKey, stakingPool: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(TREASURY_SEED), stakingPool.toBuffer()],
     programId
   );
 }
@@ -144,7 +161,7 @@ export async function createInitializeStakingPoolTransaction(adminPublicKey: Pub
 
   try {
     const { blockhash } = await connection.getLatestBlockhash("finalized");
-    
+
     const transaction = await program.methods
       .initializeStakingPool()
       .accounts({
@@ -159,8 +176,8 @@ export async function createInitializeStakingPoolTransaction(adminPublicKey: Pub
       })
       .transaction();
 
-    transaction.recentBlockhash = blockhash;
     transaction.feePayer = adminPublicKey;  
+    transaction.recentBlockhash = blockhash;
 
     return {
       success: true,
@@ -183,7 +200,8 @@ export async function createInitializeStakingPoolTransaction(adminPublicKey: Pub
 }
 
 // === Create Stake Tokens Transaction ===
-export async function createStakeTokensTransaction(userPublicKey: string, amount: number) {
+export async function 
+createStakeTokensTransaction(userPublicKey: string, amount: number) {
   const { program, connection } = getProgram();
   const userPubKey = new PublicKey(userPublicKey);
 
@@ -208,8 +226,9 @@ export async function createStakeTokensTransaction(userPublicKey: string, amount
   );
 
   try {
+
     const { blockhash } = await connection.getLatestBlockhash("finalized");
-    
+
     const transaction = await program.methods
       .stake(new anchor.BN(amount * Math.pow(10, 6)))
       .accounts({
@@ -224,7 +243,6 @@ export async function createStakeTokensTransaction(userPublicKey: string, amount
         tokenProgram: TOKEN_2022_PROGRAM_ID,
       })
       .transaction();
-
     transaction.recentBlockhash = blockhash;
     transaction.feePayer = userPubKey;
 
@@ -276,7 +294,7 @@ export async function createUnstakeTokensTransaction(userPublicKey: string, amou
 
   try {
     const { blockhash } = await connection.getLatestBlockhash("finalized");
-    
+
     const accounts: any = {
       staker: userPubKey,
       stakingPool: stakingPool,
@@ -296,8 +314,8 @@ export async function createUnstakeTokensTransaction(userPublicKey: string, amou
       .accounts(accounts)
       .transaction();
 
-    transaction.recentBlockhash = blockhash;
     transaction.feePayer = userPubKey;
+    transaction.recentBlockhash = blockhash;
 
     return {
       success: true,
@@ -329,7 +347,7 @@ export async function createInitializeGovernanceAccountTransaction(userPublicKey
 
   try {
     const { blockhash } = await connection.getLatestBlockhash("finalized");
-    
+
     const transaction = await program.methods
       .initializeGovernanceAccount()
       .accounts({
@@ -339,8 +357,8 @@ export async function createInitializeGovernanceAccountTransaction(userPublicKey
       })
       .transaction();
 
-    transaction.recentBlockhash = blockhash;
     transaction.feePayer = userPubKey;
+    transaction.recentBlockhash = blockhash;
 
     return {
       success: true,
@@ -369,7 +387,7 @@ export async function createCalculateVotingPowerTransaction(userPublicKey: strin
 
   try {
     const { blockhash } = await connection.getLatestBlockhash("finalized");
-    
+
     const transaction = await program.methods
       .calculateVotingPower()
       .accounts({
@@ -379,8 +397,8 @@ export async function createCalculateVotingPowerTransaction(userPublicKey: strin
       })
       .transaction();
 
-    transaction.recentBlockhash = blockhash;
     transaction.feePayer = userPubKey;
+    transaction.recentBlockhash = blockhash;
 
     return {
       success: true,
@@ -416,7 +434,7 @@ export async function createInitializeProposalEscrowTransaction(adminPublicKey: 
 
   try {
     const { blockhash } = await connection.getLatestBlockhash("finalized");
-    
+
     const transaction = await program.methods
       .initializeProposalEscrow()
       .accounts({
@@ -430,8 +448,8 @@ export async function createInitializeProposalEscrowTransaction(adminPublicKey: 
       })
       .transaction();
 
-    transaction.recentBlockhash = blockhash;
     transaction.feePayer = adminPublicKey;
+    transaction.recentBlockhash = blockhash;
 
     return {
       success: true,
@@ -488,7 +506,7 @@ export async function createProposalTransaction(
 
   try {
     const { blockhash } = await connection.getLatestBlockhash("finalized");
-    
+
     const transaction = await program.methods
       .createProposal(
         new anchor.BN(proposalId),
@@ -513,8 +531,8 @@ export async function createProposalTransaction(
       })
       .transaction();
 
-    transaction.recentBlockhash = blockhash;
     transaction.feePayer = userPubKey;
+    transaction.recentBlockhash = blockhash;
 
     return {
       success: true,
@@ -569,7 +587,7 @@ export async function createCastVoteTransaction(
 
   try {
     const { blockhash } = await connection.getLatestBlockhash("finalized");
-    
+
     const transaction = await program.methods
       .castVote(voteChoiceAnchor)
       .accounts({
@@ -582,8 +600,8 @@ export async function createCastVoteTransaction(
       })
       .transaction();
 
-    transaction.recentBlockhash = blockhash;
     transaction.feePayer = userPubKey;
+    transaction.recentBlockhash = blockhash;
 
     return {
       success: true,
@@ -640,12 +658,12 @@ export async function getUserStakingInfo(userPublicKey: string) {
 
   try {
     const stakingInfo = await program.account.userStakingAccount.fetch(userStakingAccount) as UserStakingAccount;
-    
+    console.log("stakingInfo", stakingInfo.stakedAmount.toNumber()/1_000_000);
     return {
       success: true,
       data: {
         staker: stakingInfo.staker.toString(),
-        stakedAmount: stakingInfo.stakedAmount.toNumber(),
+        stakedAmount: stakingInfo.stakedAmount.toNumber()/1_000_000,
         timestamp: stakingInfo.timestamp.toNumber(),
         lastUpdated: stakingInfo.lastUpdated.toNumber(),
         bump: stakingInfo.bump,
@@ -849,4 +867,583 @@ export async function checkVotingEligibility(userPublicKey: string) {
     }
     return { success: false, error: error.message || 'Failed to check voting eligibility' };
   }
+}
+
+// === Create Finalize Proposal Transaction ===
+export async function createFinalizeProposalTransaction(
+  userPublicKey: string,
+  proposalId: number
+) {
+  const { program, connection } = getProgram();
+  const userPubKey = new PublicKey(userPublicKey);
+
+  // Get all required PDAs
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [programAuthority] = getProgramAuthorityPda(program.programId);
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+  const [depositEscrowAccount] = getProposalEscrowPda(program.programId);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  // Get proposer's token account for potential deposit refund
+  // We need to fetch the proposal first to get the proposer
+  let proposerTokenAccount: PublicKey;
+  try {
+    const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    proposerTokenAccount = getAssociatedTokenAddressSync(
+      tokenMintAddress,
+      new PublicKey(proposalData.proposer),
+      false,
+      TOKEN_2022_PROGRAM_ID
+    );
+  } catch (error: any) {
+    throw new Error(`Proposal #${proposalId} does not exist`);
+  }
+
+  try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+
+    const transaction = await program.methods
+      .finalizeProposal()
+      .accounts({
+        finalizer: userPubKey,
+        proposalAccount: proposalAccount,
+        stakingPool: stakingPool,
+        programAuthority: programAuthority,
+        depositEscrowAccount: depositEscrowAccount,
+        proposerTokenAccount: proposerTokenAccount,
+        tokenMint: tokenMintAddress,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+      })
+      .transaction();
+
+    transaction.feePayer = userPubKey;
+    transaction.recentBlockhash = blockhash;
+
+    return {
+      success: true,
+      message: "Finalize proposal transaction created successfully!",
+      transaction: transaction.serialize({ requireAllSignatures: false }).toString('base64'),
+      accounts: {
+        proposalAccount: proposalAccount.toString(),
+        stakingPool: stakingPool.toString(),
+        programAuthority: programAuthority.toString(),
+        depositEscrowAccount: depositEscrowAccount.toString(),
+        proposerTokenAccount: proposerTokenAccount.toString(),
+      }
+    };
+  } catch (error: any) {
+    console.error("Error creating finalize proposal transaction:", error);
+    return { 
+      success: false, 
+      message: `Error creating finalize proposal transaction: ${error.message || error}` 
+    };
+  }
+}
+
+// === Get Proposal Finalization Status ===
+export async function getProposalFinalizationStatus(proposalId: number) {
+  const { program } = getProgram();
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+
+  try {
+    const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    const currentTime = Math.floor(Date.now() / 1000);
+    const status = Object.keys(proposalData.status)[0];
+
+    // Convert BN to number
+    const votingEndsAtNum = typeof proposalData.votingEndsAt === 'number' 
+      ? proposalData.votingEndsAt 
+      : Number(proposalData.votingEndsAt);
+    
+    const finalizedAtNum = typeof proposalData.finalizedAt === 'number'
+      ? proposalData.finalizedAt
+      : Number(proposalData.finalizedAt);
+
+    const canFinalize = 
+      status === 'active' && 
+      currentTime >= votingEndsAtNum &&
+      finalizedAtNum === 0;
+
+    const timeUntilVotingEnds = votingEndsAtNum - currentTime;
+    const isVotingEnded = timeUntilVotingEnds <= 0;
+
+    return {
+      success: true,
+      data: {
+        proposalId: proposalId,
+        currentStatus: status,
+        canFinalize: canFinalize,
+        votingEnded: isVotingEnded,
+        alreadyFinalized: finalizedAtNum !== 0,
+        votingEndsAt: votingEndsAtNum,
+        finalizedAt: finalizedAtNum !== 0 ? finalizedAtNum : null,
+        timeUntilVotingEnds: !isVotingEnded ? timeUntilVotingEnds : 0,
+        votes: {
+          yes: proposalData.yesVotes.toString(),
+          no: proposalData.noVotes.toString(),
+          abstain: proposalData.abstainVotes.toString(),
+          totalVoters: proposalData.totalVoters,
+        },
+      }
+    };
+  } catch (error: any) {
+    console.error("Error fetching proposal finalization status:", error);
+    if (error.message && error.message.includes("Account does not exist")) {
+      return { 
+        success: false, 
+        error: `Proposal #${proposalId} does not exist` 
+      };
+    }
+    return { 
+      success: false, 
+      error: error.message || 'Failed to fetch proposal finalization status' 
+    };
+  }
+}
+
+// === Check User Token Balance ===
+export async function checkUserTokenBalance(userPublicKey: string) {
+  const { connection } = getProgram();
+  const userPubKey = new PublicKey(userPublicKey);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  const userTokenAccount = getAssociatedTokenAddressSync(
+    tokenMintAddress,
+    userPubKey,
+    false,
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  try {
+    const accountInfo = await connection.getParsedAccountInfo(userTokenAccount);
+    
+    if (accountInfo.value) {
+      const tokenBalance = (accountInfo.value.data as any).parsed.info.tokenAmount;
+      console.log(`User token balance: ${tokenBalance.uiAmount} tokens`);
+      console.log(`Raw amount: ${tokenBalance.amount}`);
+      
+      return {
+        success: true,
+        data: {
+          balance: tokenBalance.uiAmount,
+          decimals: tokenBalance.decimals,
+          tokenAccount: userTokenAccount.toString(),
+          tokenMint: tokenMintAddress.toString(),
+          userPublicKey: userPubKey.toString()
+        }
+      };
+    } else {
+      console.log("User token account doesn't exist");
+      return {
+        success: true,
+        data: {
+          balance: 0,
+          rawBalance: "0",
+          decimals: 6,
+          tokenAccount: userTokenAccount.toString(),
+          tokenMint: tokenMintAddress.toString(),
+          userPublicKey: userPubKey.toString(),
+          message: "Token account does not exist - user has no tokens"
+        }
+      };
+    }
+  } catch (error: any) {
+    console.error("Error checking user token balance:", error);
+    return { 
+      success: false, 
+      error: error.message || 'Failed to check user token balance' 
+    };
+  }
+}
+
+// === Execute Proposal Transactions (Client-side) ===
+export async function createExecuteTextProposalTransaction(
+  userPublicKey: string,
+  proposalId: number
+) {
+  const { program, connection } = getProgram();
+  const userPubKey = new PublicKey(userPublicKey);
+
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [programAuthority] = getProgramAuthorityPda(program.programId);
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+  const [depositEscrowAccount] = getProposalEscrowPda(program.programId);
+  const [governanceConfig] = getGovernanceConfigPda(program.programId);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  // Fetch proposer to compute proposer token account (for potential deposit refund path)
+  let proposerTokenAccount: PublicKey;
+  try {
+    const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    proposerTokenAccount = getAssociatedTokenAddressSync(
+      tokenMintAddress,
+      new PublicKey(proposalData.proposer),
+      false,
+      TOKEN_2022_PROGRAM_ID
+    );
+  } catch (e) {
+    throw new Error(`Proposal #${proposalId} does not exist`);
+  }
+
+  try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+
+    const transaction = await program.methods
+      .executeProposal()
+      .accounts({
+        executor: userPubKey,
+        proposalAccount: proposalAccount,
+        stakingPool: stakingPool,
+        programAuthority: programAuthority,
+        depositEscrowAccount: depositEscrowAccount,
+        proposerTokenAccount: proposerTokenAccount,
+        depositTokenMint: tokenMintAddress,
+        tokenProgramForDeposit: TOKEN_2022_PROGRAM_ID,
+        governanceConfig: governanceConfig,
+        treasuryAccount: null,
+        recipientAccount: null,
+        tokenMint: null,
+        tokenProgram: null,
+      })
+      .transaction();
+
+    transaction.feePayer = userPubKey;
+    transaction.recentBlockhash = blockhash;
+
+    return {
+      success: true,
+      message: "Execute text proposal transaction created successfully!",
+      transaction: transaction.serialize({ requireAllSignatures: false }).toString('base64'),
+      accounts: {
+        proposalAccount: proposalAccount.toString(),
+      }
+    };
+  } catch (error: any) {
+    console.error("Error creating execute text proposal transaction:", error);
+    return { success: false, message: error.message || 'Failed to create execute text proposal transaction' };
+  }
+}
+
+export async function createExecuteTreasuryTransferTransaction(
+  userPublicKey: string,
+  proposalId: number,
+  treasuryAccountOrWallet: string,
+  recipientAccountOrWallet: string
+) {
+  const { program, connection } = getProgram();
+  const userPubKey = new PublicKey(userPublicKey);
+
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [programAuthority] = getProgramAuthorityPda(program.programId);
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+  const [depositEscrowAccount] = getProposalEscrowPda(program.programId);
+  const [governanceConfig] = getGovernanceConfigPda(program.programId);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  // proposer token account
+  let proposerTokenAccount: PublicKey;
+  try {
+    const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    proposerTokenAccount = getAssociatedTokenAddressSync(
+      tokenMintAddress,
+      new PublicKey(proposalData.proposer),
+      false,
+      TOKEN_2022_PROGRAM_ID
+    );
+  } catch (e) {
+    throw new Error(`Proposal #${proposalId} does not exist`);
+  }
+
+  // Resolve recipient/treasury to Token-2022 ATAs if wallets provided
+  const resolveToken2022Account = async (address: string): Promise<PublicKey> => {
+    const pub = new PublicKey(address);
+    const acct = await connection.getAccountInfo(pub);
+    if (acct && acct.owner.equals(TOKEN_2022_PROGRAM_ID)) return pub;
+    return getAssociatedTokenAddressSync(tokenMintAddress, pub, false, TOKEN_2022_PROGRAM_ID);
+  };
+
+  const treasuryAccount = await resolveToken2022Account(treasuryAccountOrWallet);
+  const recipientAccount = await resolveToken2022Account(recipientAccountOrWallet);
+
+  try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+
+    const transaction = await program.methods
+      .executeProposal()
+      .accounts({
+        executor: userPubKey,
+        proposalAccount: proposalAccount,
+        stakingPool: stakingPool,
+        programAuthority: programAuthority,
+        depositEscrowAccount: depositEscrowAccount,
+        proposerTokenAccount: proposerTokenAccount,
+        depositTokenMint: tokenMintAddress,
+        tokenProgramForDeposit: TOKEN_2022_PROGRAM_ID,
+        governanceConfig: governanceConfig,
+        treasuryAccount: treasuryAccount,
+        recipientAccount: recipientAccount,
+        tokenMint: tokenMintAddress,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+      })
+      .transaction();
+
+    transaction.feePayer = userPubKey;
+    transaction.recentBlockhash = blockhash;
+
+    return {
+      success: true,
+      message: "Execute treasury transfer transaction created successfully!",
+      transaction: transaction.serialize({ requireAllSignatures: false }).toString('base64'),
+      accounts: {
+        proposalAccount: proposalAccount.toString(),
+        treasuryAccount: treasuryAccount.toString(),
+        recipientAccount: recipientAccount.toString(),
+      }
+    };
+  } catch (error: any) {
+    console.error("Error creating execute treasury transfer transaction:", error);
+    return { success: false, message: error.message || 'Failed to create execute treasury transfer transaction' };
+  }
+}
+
+export async function createExecuteParameterUpdateTransaction(
+  userPublicKey: string,
+  proposalId: number
+) {
+  const { program, connection } = getProgram();
+  const userPubKey = new PublicKey(userPublicKey);
+
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [programAuthority] = getProgramAuthorityPda(program.programId);
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+  const [depositEscrowAccount] = getProposalEscrowPda(program.programId);
+  const [governanceConfig] = getGovernanceConfigPda(program.programId);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  // proposer token account
+  let proposerTokenAccount: PublicKey;
+  try {
+    const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+    proposerTokenAccount = getAssociatedTokenAddressSync(
+      tokenMintAddress,
+      new PublicKey(proposalData.proposer),
+      false,
+      TOKEN_2022_PROGRAM_ID
+    );
+  } catch {
+    throw new Error(`Proposal #${proposalId} does not exist`);
+  }
+
+  try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+
+    const transaction = await program.methods
+      .executeProposal()
+      .accounts({
+        executor: userPubKey,
+        proposalAccount: proposalAccount,
+        stakingPool: stakingPool,
+        programAuthority: programAuthority,
+        depositEscrowAccount: depositEscrowAccount,
+        proposerTokenAccount: proposerTokenAccount,
+        depositTokenMint: tokenMintAddress,
+        tokenProgramForDeposit: TOKEN_2022_PROGRAM_ID,
+        governanceConfig: governanceConfig,
+        treasuryAccount: null,
+        recipientAccount: null,
+        tokenMint: null,
+        tokenProgram: null,
+      })
+      .transaction();
+
+    transaction.feePayer = userPubKey;
+    transaction.recentBlockhash = blockhash;
+
+    return {
+      success: true,
+      message: "Execute parameter update transaction created successfully!",
+      transaction: transaction.serialize({ requireAllSignatures: false }).toString('base64'),
+      accounts: {
+        proposalAccount: proposalAccount.toString(),
+        governanceConfig: governanceConfig.toString(),
+      }
+    };
+  } catch (error: any) {
+    console.error("Error creating execute parameter update transaction:", error);
+    return { success: false, message: error.message || 'Failed to create execute parameter update transaction' };
+  }
+}
+
+export async function createExecuteProposalSmartTransaction(
+  userPublicKey: string,
+  proposalId: number,
+  opts?: { treasuryAccount?: string; recipientAccount?: string }
+) {
+  const { program } = getProgram();
+  const [proposalAccount] = getProposalPda(program.programId, proposalId);
+  const data = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
+  const proposalType = Object.keys(data.proposalType)[0];
+
+  if (proposalType === 'treasuryTransfer') {
+    if (!opts?.treasuryAccount || !opts?.recipientAccount) {
+      throw new Error('treasuryAccount and recipientAccount are required for treasury transfers');
+    }
+    return await createExecuteTreasuryTransferTransaction(
+      userPublicKey,
+      proposalId,
+      opts.treasuryAccount,
+      opts.recipientAccount
+    );
+  }
+  if (proposalType === 'parameterUpdate') {
+    return await createExecuteParameterUpdateTransaction(userPublicKey, proposalId);
+  }
+  return await createExecuteTextProposalTransaction(userPublicKey, proposalId);
+}
+
+// === Initialize Treasury (Admin only) ===
+export async function createInitializeTreasuryTransaction(adminPublicKey: PublicKey) {
+  const { program, connection } = getProgram();
+
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [programAuthority] = getProgramAuthorityPda(program.programId);
+  const [treasuryAccount] = getTreasuryPda(program.programId, stakingPool);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+
+    const transaction = await program.methods
+      .initializeTreasury()
+      .accounts({
+        admin: adminPublicKey,
+        stakingPool: stakingPool,
+        programAuthority: programAuthority,
+        treasuryAccount: treasuryAccount,
+        tokenMint: tokenMintAddress,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
+      })
+      .transaction();
+
+    transaction.feePayer = adminPublicKey;
+    transaction.recentBlockhash = blockhash;
+
+    return {
+      success: true,
+      message: "Initialize treasury transaction created successfully!",
+      transaction: transaction.serialize({ requireAllSignatures: false }).toString('base64'),
+      accounts: {
+        treasuryAccount: treasuryAccount.toString(),
+        programAuthority: programAuthority.toString(),
+      }
+    };
+  } catch (error: any) {
+    console.error("Error creating initialize treasury transaction:", error);
+    return { 
+      success: false, 
+      message: `Error creating initialize treasury transaction: ${error.message || error}` 
+    };
+  }
+}
+
+// === Fund Treasury (Admin only) ===
+export async function createFundTreasuryTransaction(adminPublicKey: PublicKey, amountTokens: number) {
+  const { program, connection } = getProgram();
+
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [treasuryAccount] = getTreasuryPda(program.programId, stakingPool);
+
+  const tokenMint = process.env.ZSNIPE_MINT_ADDRESS;
+  if (!tokenMint) {
+    throw new Error("ZSNIPE_MINT_ADDRESS is not set in environment variables");
+  }
+  const tokenMintAddress = new PublicKey(tokenMint);
+
+  // Admin's token account
+  const adminTokenAccount = getAssociatedTokenAddressSync(
+    tokenMintAddress,
+    adminPublicKey,
+    false,
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  try {
+    const { blockhash } = await connection.getLatestBlockhash("finalized");
+    const amount = BigInt(Math.floor(amountTokens * 1_000_000));
+
+    const ix = createTransferInstruction(
+      adminTokenAccount,
+      treasuryAccount,
+      adminPublicKey,
+      Number(amount),
+      [],
+      TOKEN_2022_PROGRAM_ID
+    );
+
+    const tx = new Transaction().add(ix);
+    tx.feePayer = adminPublicKey;
+    tx.recentBlockhash = blockhash;
+
+    return {
+      success: true,
+      message: "Fund treasury transaction created successfully!",
+      transaction: tx.serialize({ requireAllSignatures: false }).toString('base64'),
+      accounts: {
+        adminTokenAccount: adminTokenAccount.toString(),
+        treasuryAccount: treasuryAccount.toString(),
+        tokenMint: tokenMintAddress.toString(),
+      }
+    };
+  } catch (error: any) {
+    console.error("Error creating fund treasury transaction:", error);
+    return { 
+      success: false, 
+      message: `Error creating fund treasury transaction: ${error.message || error}` 
+    };
+  }
+}
+
+// === Get Treasury Account (read-only) ===
+export async function getTreasuryAccountInterface() {
+  const { program } = getProgram();
+  const [stakingPool] = getStakingPoolPda(program.programId);
+  const [treasuryAccount] = getTreasuryPda(program.programId, stakingPool);
+
+  return {
+    success: true,
+    data: {
+      address: treasuryAccount.toString(),
+    }
+  };
 }

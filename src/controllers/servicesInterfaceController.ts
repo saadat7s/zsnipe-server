@@ -10,17 +10,27 @@ import {
   // Renamed to avoid import conflict
   createProposalTransaction as importedCreateProposalTransaction,
   createCastVoteTransaction,
+  createFinalizeProposalTransaction,
   getStakingPoolInfo,
   getUserStakingInfo,
   getGovernanceAccountInfo,
   getProposalInfo,
   getAllProposals,
   getVoteRecord,
+  getProposalFinalizationStatus,
+  checkUserTokenBalance,
   calculateHybridVotingPower,
   checkVotingEligibility,
   MIN_STAKE_TO_PROPOSE,
   MIN_STAKE_DURATION_TO_PROPOSE,
   PROPOSAL_DEPOSIT_AMOUNT,
+  createInitializeTreasuryTransaction,
+  createFundTreasuryTransaction,
+  getTreasuryAccountInterface,
+  createExecuteTextProposalTransaction,
+  createExecuteTreasuryTransferTransaction,
+  createExecuteParameterUpdateTransaction,
+  createExecuteProposalSmartTransaction,
 } from '../services/staking/servicesInterface';
 import { VoteChoice } from '../services/types';
 import { PublicKey } from '@solana/web3.js';
@@ -461,5 +471,173 @@ export async function getProposalRequirementsInterface(req: Request, res: Respon
       success: false, 
       error: error?.message || 'Failed to fetch requirements' 
     });
+  }
+}
+
+// === Create Finalize Proposal Transaction ===
+export async function createFinalizeProposalTransactionInterface(req: Request, res: Response) {
+  try {
+    const { userPublicKey, proposalId } = req.body;
+
+    // Validation
+    if (!userPublicKey || typeof userPublicKey !== 'string') {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Valid userPublicKey is required' 
+      });
+    }
+
+    if (!proposalId || typeof proposalId !== 'number') {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Valid proposalId (number) is required' 
+      });
+    }
+
+    const result = await createFinalizeProposalTransaction(userPublicKey, proposalId);
+    res.status(200).json(result);
+  } catch (error: any) {
+    console.error("Create finalize proposal transaction error:", error);
+    res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Failed to create finalize proposal transaction' 
+    });
+  }
+}
+
+// === Get Proposal Finalization Status ===
+export async function getProposalFinalizationStatusInterface(req: Request, res: Response) {
+  try {
+    const proposalId = Number(req.params.proposalId);
+    
+    if (!Number.isFinite(proposalId) || proposalId < 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Valid proposalId is required' 
+      });
+    }
+
+    const result = await getProposalFinalizationStatus(proposalId);
+    res.status(200).json(result);
+  } catch (error: any) {
+    res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Failed to fetch proposal finalization status' 
+    });
+  }
+}
+
+// === Check User Token Balance ===
+export async function checkUserTokenBalanceInterface(req: Request, res: Response) {
+  try {
+    const { userPublicKey } = req.params;
+    
+    if (!userPublicKey || typeof userPublicKey !== 'string') {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Valid userPublicKey is required' 
+      });
+    }
+
+    const result = await checkUserTokenBalance(userPublicKey);
+    res.status(200).json(result);
+  } catch (error: any) {
+    res.status(500).json({ 
+      success: false, 
+      error: error?.message || 'Failed to check user token balance' 
+    });
+  }
+}
+
+// === Execute Proposal Transactions (Interface) ===
+export async function executeTextProposalInterface(req: Request, res: Response) {
+  try {
+    const { userPublicKey, proposalId } = req.body;
+    if (!userPublicKey || typeof userPublicKey !== 'string' || typeof proposalId !== 'number') {
+      return res.status(400).json({ success: false, error: 'userPublicKey (string) and proposalId (number) are required' });
+    }
+    const result = await createExecuteTextProposalTransaction(userPublicKey, proposalId);
+    res.status(200).json(result);
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error?.message || 'Failed to create execute text proposal transaction' });
+  }
+}
+
+export async function executeTreasuryTransferInterface(req: Request, res: Response) {
+  try {
+    const { userPublicKey, proposalId, treasuryAccount, recipientAccount } = req.body;
+    if (!userPublicKey || typeof userPublicKey !== 'string' || typeof proposalId !== 'number' || !treasuryAccount || !recipientAccount) {
+      return res.status(400).json({ success: false, error: 'userPublicKey, proposalId, treasuryAccount, recipientAccount are required' });
+    }
+    const result = await createExecuteTreasuryTransferTransaction(userPublicKey, proposalId, treasuryAccount, recipientAccount);
+    res.status(200).json(result);
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error?.message || 'Failed to create execute treasury transfer transaction' });
+  }
+}
+
+export async function executeParameterUpdateInterface(req: Request, res: Response) {
+  try {
+    const { userPublicKey, proposalId } = req.body;
+    if (!userPublicKey || typeof userPublicKey !== 'string' || typeof proposalId !== 'number') {
+      return res.status(400).json({ success: false, error: 'userPublicKey (string) and proposalId (number) are required' });
+    }
+    const result = await createExecuteParameterUpdateTransaction(userPublicKey, proposalId);
+    res.status(200).json(result);
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error?.message || 'Failed to create execute parameter update transaction' });
+  }
+}
+
+export async function executeProposalSmartInterface(req: Request, res: Response) {
+  try {
+    const { userPublicKey, proposalId, treasuryAccount, recipientAccount } = req.body;
+    if (!userPublicKey || typeof userPublicKey !== 'string' || typeof proposalId !== 'number') {
+      return res.status(400).json({ success: false, error: 'userPublicKey (string) and proposalId (number) are required' });
+    }
+    const result = await createExecuteProposalSmartTransaction(userPublicKey, proposalId, { treasuryAccount, recipientAccount });
+    res.status(200).json(result);
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error?.message || 'Failed to create execute proposal transaction' });
+  }
+}
+
+// === Treasury Interface Controllers ===
+export async function initTreasuryInterface(req: Request, res: Response) {
+  try {
+    const { adminPublicKey } = req.body;
+    if (!adminPublicKey || typeof adminPublicKey !== 'string') {
+      return res.status(400).json({ success: false, error: 'Valid adminPublicKey is required' });
+    }
+    const result = await createInitializeTreasuryTransaction(new PublicKey(adminPublicKey));
+    res.status(200).json(result);
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error?.message || 'Failed to create initialize treasury transaction' });
+  }
+}
+
+export async function fundTreasuryInterface(req: Request, res: Response) {
+  try {
+    const { adminPublicKey, amount } = req.body;
+    if (!adminPublicKey || typeof adminPublicKey !== 'string') {
+      return res.status(400).json({ success: false, error: 'Valid adminPublicKey is required' });
+    }
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      return res.status(400).json({ success: false, error: 'Valid positive amount is required' });
+    }
+    const result = await createFundTreasuryTransaction(new PublicKey(adminPublicKey), amt);
+    res.status(200).json(result);
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error?.message || 'Failed to create fund treasury transaction' });
+  }
+}
+
+export async function getTreasuryAccountInterfaceController(req: Request, res: Response) {
+  try {
+    const result = await getTreasuryAccountInterface();
+    res.status(200).json(result);
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error?.message || 'Failed to get treasury account' });
   }
 }
