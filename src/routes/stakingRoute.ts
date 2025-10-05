@@ -24,7 +24,24 @@ import {
   getVote,
   submitVote,
   finalizeProposalController,
-  getFinalizationStatusController
+  getFinalizationStatusController,
+  initializeGovernanceConfigController,
+  executeTextProposalController,
+  executeTreasuryTransferController,
+  executeParameterUpdateController,
+  executeProposalSmartController,
+  getExecutionReadinessController,
+  getExecutionPreviewController,
+  bulkExecuteController,
+  getExecutionScheduleController,
+  getAdminTreasuryController,
+  initializeTreasuryController,
+  fundTreasuryController,
+  getTreasuryAccountController,
+  buildTreasuryExecutionDataController,
+  buildParameterExecutionDataController,
+  decodeTreasuryExecutionDataController,
+  decodeParameterExecutionDataController
 } from '../controllers/stakingController';
 
 const router = Router();
@@ -44,6 +61,7 @@ router.get('/governance/preview-voting-power', previewVotingPower);
 router.get('/governance/eligibilit  y', eligibility);
 router.get('/governance/info', governanceInfo);
 router.get('/governance/summary', governanceSummary);
+router.post('/governance/config/initialize', initializeGovernanceConfigController);
 
 // Mock wallet simulation routes
 router.get('/wallets/all', getAllWallets);
@@ -58,6 +76,26 @@ router.get('/proposals/list', listProposals);
 router.get('/proposals/:proposalId', getProposal);
 router.post('/proposals/:proposalId/finalize', finalizeProposalController);
 router.get('/proposals/:proposalId/finalization-status', getFinalizationStatusController);
+router.get('/proposals/:proposalId/execution-readiness', getExecutionReadinessController);
+router.get('/proposals/:proposalId/execution-preview', getExecutionPreviewController);
+router.post('/proposals/bulk-execute', bulkExecuteController);
+router.get('/proposals/execution-schedule', getExecutionScheduleController);
+
+// Proposal execution routes
+router.post('/proposals/:proposalId/execute/text', executeTextProposalController);
+router.post('/proposals/:proposalId/execute/treasury', executeTreasuryTransferController);
+router.post('/proposals/:proposalId/execute/parameter', executeParameterUpdateController);
+router.post('/proposals/:proposalId/execute', executeProposalSmartController);
+
+// Treasury and execution data routes
+router.get('/governance/treasury/admin-account', getAdminTreasuryController);
+router.post('/governance/treasury/initialize', initializeTreasuryController);
+router.post('/governance/treasury/fund', fundTreasuryController);
+router.get('/governance/treasury/account', getTreasuryAccountController);
+router.post('/governance/execution-data/treasury', buildTreasuryExecutionDataController);
+router.post('/governance/execution-data/parameter', buildParameterExecutionDataController);
+router.post('/governance/execution-data/decode/treasury', decodeTreasuryExecutionDataController);
+router.post('/governance/execution-data/decode/parameter', decodeParameterExecutionDataController);
 
 
 // Vote routes
