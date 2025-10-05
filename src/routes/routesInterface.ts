@@ -19,7 +19,14 @@ import {
   checkUserTokenBalanceInterface,
   previewVotingPowerInterface,
   checkEligibilityInterface,
-  getProposalRequirementsInterface
+  getProposalRequirementsInterface,
+  initTreasuryInterface,
+  fundTreasuryInterface,
+  getTreasuryAccountInterfaceController,
+  executeTextProposalInterface,
+  executeTreasuryTransferInterface,
+  executeParameterUpdateInterface,
+  executeProposalSmartInterface
 } from '../controllers/servicesInterfaceController';
 
 const router = Router();
@@ -619,5 +626,221 @@ router.get('/data/proposals/:proposalId/finalization-status', getProposalFinaliz
  *         description: Server error
  */
 router.get('/data/token-balance/:userPublicKey', checkUserTokenBalanceInterface);
+
+/**
+ * @swagger
+ * /api/zSnipe/transactions/execute/text:
+ *   post:
+ *     summary: Execute a text proposal transaction
+ *     tags: [Proposal Execution]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - userPublicKey
+ *               - proposalId
+ *             properties:
+ *               userPublicKey:
+ *                 type: string
+ *                 description: User's Solana public key
+ *               proposalId:
+ *                 type: number
+ *                 description: Proposal ID to execute
+ *     responses:
+ *       200:
+ *         description: Text proposal execution transaction created
+ *       400:
+ *         description: Invalid input
+ *       500:
+ *         description: Server error
+ */
+router.post('/transactions/execute/text', executeTextProposalInterface);
+
+/**
+ * @swagger
+ * /api/zSnipe/transactions/execute/treasury:
+ *   post:
+ *     summary: Execute a treasury transfer proposal transaction
+ *     tags: [Proposal Execution]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - userPublicKey
+ *               - proposalId
+ *               - treasuryAccount
+ *               - recipientAccount
+ *             properties:
+ *               userPublicKey:
+ *                 type: string
+ *                 description: User's Solana public key
+ *               proposalId:
+ *                 type: number
+ *                 description: Proposal ID to execute
+ *               treasuryAccount:
+ *                 type: string
+ *                 description: Treasury account address
+ *               recipientAccount:
+ *                 type: string
+ *                 description: Recipient account address
+ *     responses:
+ *       200:
+ *         description: Treasury transfer proposal execution transaction created
+ *       400:
+ *         description: Invalid input
+ *       500:
+ *         description: Server error
+ */
+router.post('/transactions/execute/treasury', executeTreasuryTransferInterface);
+
+/**
+ * @swagger
+ * /api/zSnipe/transactions/execute/parameter:
+ *   post:
+ *     summary: Execute a parameter update proposal transaction
+ *     tags: [Proposal Execution]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - userPublicKey
+ *               - proposalId
+ *             properties:
+ *               userPublicKey:
+ *                 type: string
+ *                 description: User's Solana public key
+ *               proposalId:
+ *                 type: number
+ *                 description: Proposal ID to execute
+ *     responses:
+ *       200:
+ *         description: Parameter update proposal execution transaction created
+ *       400:
+ *         description: Invalid input
+ *       500:
+ *         description: Server error
+ */
+router.post('/transactions/execute/parameter', executeParameterUpdateInterface);
+
+/**
+ * @swagger
+ * /api/zSnipe/transactions/execute:
+ *   post:
+ *     summary: Execute a smart proposal transaction (generic)
+ *     tags: [Proposal Execution]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - userPublicKey
+ *               - proposalId
+ *             properties:
+ *               userPublicKey:
+ *                 type: string
+ *                 description: User's Solana public key
+ *               proposalId:
+ *                 type: number
+ *                 description: Proposal ID to execute
+ *               treasuryAccount:
+ *                 type: string
+ *                 description: Treasury account address (optional, for treasury proposals)
+ *               recipientAccount:
+ *                 type: string
+ *                 description: Recipient account address (optional, for treasury proposals)
+ *     responses:
+ *       200:
+ *         description: Smart proposal execution transaction created
+ *       400:
+ *         description: Invalid input
+ *       500:
+ *         description: Server error
+ */
+router.post('/transactions/execute', executeProposalSmartInterface);
+
+/**
+ * @swagger
+ * /api/zSnipe/admin/init-treasury:
+ *   post:
+ *     summary: Initialize the treasury account (Admin only)
+ *     tags: [Admin]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - adminPublicKey
+ *             properties:
+ *               adminPublicKey:
+ *                 type: string
+ *                 description: Admin's Solana public key
+ *     responses:
+ *       200:
+ *         description: Treasury initialization transaction created
+ *       400:
+ *         description: Invalid input
+ *       500:
+ *         description: Server error
+ */
+router.post('/admin/init-treasury', initTreasuryInterface);
+
+/**
+ * @swagger
+ * /api/zSnipe/admin/fund-treasury:
+ *   post:
+ *     summary: Fund the treasury account (Admin only)
+ *     tags: [Admin]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - adminPublicKey
+ *               - amount
+ *             properties:
+ *               adminPublicKey:
+ *                 type: string
+ *                 description: Admin's Solana public key
+ *               amount:
+ *                 type: number
+ *                 description: Amount to fund the treasury
+ *     responses:
+ *       200:
+ *         description: Treasury funding transaction created
+ *       400:
+ *         description: Invalid input
+ *       500:
+ *         description: Server error
+ */
+router.post('/admin/fund-treasury', fundTreasuryInterface);
+
+/**
+ * @swagger
+ * /api/zSnipe/data/treasury-account:
+ *   get:
+ *     summary: Get treasury account information
+ *     tags: [Treasury Data]
+ *     responses:
+ *       200:
+ *         description: Treasury account information
+ *       500:
+ *         description: Server error
+ */
+router.get('/data/treasury-account', getTreasuryAccountInterfaceController);
 
 export default router;
