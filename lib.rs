@@ -45,6 +45,7 @@ pub const USER_STAKE_SEED: &[u8] = b"user_stakeV1";
 pub const STAKING_POOL_ESCROW_SEED: &[u8] = b"escrowV1";
 pub const GOVERNANCE_SEED: &[u8] = b"governanceV1";
 pub const GOVERNANCE_CONFIG_SEED: &[u8] = b"governance_configV1";
+pub const TREASURY_SEED: &[u8] = b"treasuryV1";
 
 // Governance Enums
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -100,6 +101,15 @@ pub mod zero_sided_snipe {
         staking_pool.token_price_usd_micro = 1000;
         staking_pool.price_last_updated = clock.unix_timestamp;
 
+        Ok(())
+    }
+
+    pub fn initialize_treasury(ctx: Context<InitializeTreasury>) -> Result<()> {
+        msg!("✅ Treasury account initialized");
+        msg!(
+            "🔐 Treasury address: {}",
+            ctx.accounts.treasury_account.key()
+        );
         Ok(())
     }
 
@@ -319,9 +329,10 @@ pub mod zero_sided_snipe {
             ctx.accounts.deposit_token_mint.decimals,
         )?;
 
+        let voting_duration = get_voting_duration_seconds(voting_period)?;
         let voting_ends_at = clock
             .unix_timestamp
-            .checked_add((voting_period as i64) * 86400)
+            .checked_add(voting_duration)
             .ok_or(ErrorCode::InvalidAmount)?;
 
         proposal.proposal_id = proposal_id;
@@ -578,10 +589,7 @@ pub mod zero_sided_snipe {
                 ctx.accounts.staking_pool.authority_bump,
             ),
             ProposalType::ParameterUpdate => execute_parameter_update(
-                ctx.accounts
-                    .governance_config
-                    .as_mut()
-                    .ok_or(ErrorCode::MissingGovernanceConfig)?,
+                &mut ctx.accounts.governance_config, // No .as_mut().ok_or() needed
                 &proposal.execution_data,
             ),
         };
@@ -777,6 +785,15 @@ fn transfer_deposit_to_proposer<'info>(
     Ok(())
 }
 
+fn get_voting_duration_seconds(period_index: u8) -> Result<i64> {
+    match period_index {
+        0 => Ok(300), // 5 minutes for testing
+        1 => Ok(600), // 10 minutes for testing
+        2 => Ok(900), // 15 minutes for testing
+        _ => Err(ErrorCode::InvalidVotingPeriod.into()),
+    }
+}
+
 #[account]
 pub struct StakingPool {
     pub authority: Pubkey,
@@ -899,6 +916,36 @@ pub struct InitializeStakingPool<'info> {
     pub system_program: Program<'info, System>,
     pub token_program: Interface<'info, TokenInterface>,
     pub associated_token_program: Program<'info, AssociatedToken>,
+}
+
+// Add the context
+#[derive(Accounts)]
+pub struct InitializeTreasury<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    #[account(seeds = [STAKING_POOL_SEED], bump = staking_pool.bump)]
+    pub staking_pool: Account<'info, StakingPool>,
+
+    #[account(seeds = [PROGRAM_AUTHORITY_SEED], bump = staking_pool.authority_bump)]
+    /// CHECK: Program authority PDA
+    pub program_authority: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = admin,
+        token::mint = token_mint,
+        token::authority = program_authority,
+        seeds = [TREASURY_SEED, staking_pool.key().as_ref()],
+        bump
+    )]
+    pub treasury_account: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(constraint = token_mint.to_account_info().owner == &spl_token_2022::ID @ ErrorCode::InvalidTokenProgram)]
+    pub token_mint: InterfaceAccount<'info, Mint>,
+
+    pub system_program: Program<'info, System>,
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 #[derive(Accounts)]
@@ -1183,7 +1230,11 @@ pub struct ExecuteProposal<'info> {
     #[account(mut)]
     pub executor: Signer<'info>,
 
-    #[account(mut, seeds = [PROPOSAL_SEED, proposal_account.proposal_id.to_le_bytes().as_ref()], bump = proposal_account.bump)]
+    #[account(
+        mut,
+        seeds = [PROPOSAL_SEED, &proposal_account.proposal_id.to_le_bytes()],
+        bump = proposal_account.bump,
+    )]
     pub proposal_account: Account<'info, ProposalAccount>,
 
     #[account(seeds = [STAKING_POOL_SEED], bump = staking_pool.bump)]
@@ -1193,35 +1244,43 @@ pub struct ExecuteProposal<'info> {
     /// CHECK: Program authority PDA
     pub program_authority: UncheckedAccount<'info>,
 
-    #[account(mut, seeds = [PROPOSAL_ESCROW_SEED], bump)]
+    #[account(
+        mut,
+        seeds = [PROPOSAL_ESCROW_SEED],
+        bump,
+    )]
     pub deposit_escrow_account: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(mut, constraint = proposer_token_account.owner == proposal_account.proposer @ ErrorCode::InvalidProposerAccount)]
+    #[account(mut)]
     pub proposer_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(constraint = deposit_token_mint.to_account_info().owner == &spl_token_2022::ID @ ErrorCode::InvalidTokenProgram)]
     pub deposit_token_mint: InterfaceAccount<'info, Mint>,
 
     pub token_program_for_deposit: Interface<'info, TokenInterface>,
 
-    #[account(mut)]
-    pub treasury_account: Option<InterfaceAccount<'info, TokenAccount>>,
-
-    #[account(mut)]
-    pub recipient_account: Option<InterfaceAccount<'info, TokenAccount>>,
-
-    pub token_mint: Option<InterfaceAccount<'info, Mint>>,
-
-    pub token_program: Option<Interface<'info, TokenInterface>>,
-
+    // REQUIRED - governance config is needed for parameter updates
     #[account(
         mut,
         seeds = [GOVERNANCE_CONFIG_SEED],
         bump = governance_config.bump,
     )]
-    pub governance_config: Option<Account<'info, GovernanceConfig>>,
-}
+    pub governance_config: Account<'info, GovernanceConfig>,
 
+    // OPTIONAL - only needed for treasury transfers
+    #[account(mut)]
+    /// CHECK: Optional treasury account for treasury transfer proposals
+    pub treasury_account: Option<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(mut)]
+    /// CHECK: Optional recipient account for treasury transfer proposals
+    pub recipient_account: Option<InterfaceAccount<'info, TokenAccount>>,
+
+    /// CHECK: Optional token mint for treasury transfers
+    pub token_mint: Option<InterfaceAccount<'info, Mint>>,
+
+    /// CHECK: Optional token program for treasury transfers
+    pub token_program: Option<Interface<'info, TokenInterface>>,
+}
 // ============================================================================
 // ERROR CODES
 // ============================================================================
