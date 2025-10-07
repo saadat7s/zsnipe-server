@@ -31,6 +31,9 @@ import {
   createExecuteTreasuryTransferTransaction,
   createExecuteParameterUpdateTransaction,
   createExecuteProposalSmartTransaction,
+  buildTextExecutionData,
+  buildTreasuryTransferExecutionData,
+  buildParameterUpdateExecutionData,
 } from '../services/staking/servicesInterface';
 import { VoteChoice } from '../services/types';
 import { PublicKey } from '@solana/web3.js';
@@ -639,5 +642,42 @@ export async function getTreasuryAccountInterfaceController(req: Request, res: R
     res.status(200).json(result);
   } catch (error: any) {
     res.status(500).json({ success: false, error: error?.message || 'Failed to get treasury account' });
+  }
+}
+
+// === Execution Data Builder Controllers ===
+export async function buildTextExecutionDataController(req: Request, res: Response) {
+  try {
+    const { metadata } = req.body || {};
+    const data = buildTextExecutionData(metadata);
+    res.status(200).json({ success: true, data: { executionData: data, length: data.length } });
+  } catch (error: any) {
+    res.status(400).json({ success: false, error: error?.message || 'Failed to build text execution data' });
+  }
+}
+
+export async function buildTreasuryExecutionDataControllerInterface(req: Request, res: Response) {
+  try {
+    const { recipientAddress, amountMicroTokens } = req.body || {};
+    if (!recipientAddress || !amountMicroTokens) {
+      return res.status(400).json({ success: false, error: 'recipientAddress and amountMicroTokens are required' });
+    }
+    const data = buildTreasuryTransferExecutionData(recipientAddress, Number(amountMicroTokens));
+    res.status(200).json({ success: true, data: { executionData: data, length: data.length } });
+  } catch (error: any) {
+    res.status(400).json({ success: false, error: error?.message || 'Failed to build treasury execution data' });
+  }
+}
+
+export async function buildParameterExecutionDataController(req: Request, res: Response) {
+  try {
+    const { parameterId, newValue } = req.body || {};
+    if (parameterId === undefined || newValue === undefined) {
+      return res.status(400).json({ success: false, error: 'parameterId and newValue are required' });
+    }
+    const data = buildParameterUpdateExecutionData(Number(parameterId), Number(newValue));
+    res.status(200).json({ success: true, data: { executionData: data, length: data.length } });
+  } catch (error: any) {
+    res.status(400).json({ success: false, error: error?.message || 'Failed to build parameter execution data' });
   }
 }

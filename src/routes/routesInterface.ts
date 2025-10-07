@@ -26,7 +26,10 @@ import {
   executeTextProposalInterface,
   executeTreasuryTransferInterface,
   executeParameterUpdateInterface,
-  executeProposalSmartInterface
+  executeProposalSmartInterface,
+  buildTextExecutionDataController,
+  buildTreasuryExecutionDataControllerInterface,
+  buildParameterExecutionDataController
 } from '../controllers/servicesInterfaceController';
 
 const router = Router();
@@ -842,5 +845,10 @@ router.post('/admin/fund-treasury', fundTreasuryInterface);
  *         description: Server error
  */
 router.get('/data/treasury-account', getTreasuryAccountInterfaceController);
+
+// Execution data builder endpoints
+router.post('/execution-data/text', buildTextExecutionDataController);
+router.post('/execution-data/treasury', buildTreasuryExecutionDataControllerInterface);
+router.post('/execution-data/parameter', buildParameterExecutionDataController);
 
 export default router;
