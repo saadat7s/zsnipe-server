@@ -774,6 +774,87 @@ export async function getAllProposals(maxProposalId: number = 10) {
   };
 }
 
+// Types for better type safety
+interface ProposalAccount {
+  proposalId: number;
+  title: string;
+  description: string;
+  proposer: string;
+  status: string;
+  proposalType: string;
+  votingPeriodDays: number;
+  createdAt: number;
+  votingEndsAt: number;
+  finalizedAt: number;
+  executedAt: number;
+  timelockEnd: number;
+  yesVotes: number;
+  noVotes: number;
+  abstainVotes: number;
+  totalVoters: number;
+  depositAmount: number;
+  depositRefunded: boolean;
+  publicKey: string;
+}
+
+interface GetAllProposalsResponse {
+  success: boolean;
+  count: number;
+  proposals: ProposalAccount[];
+}
+
+export async function getAllProposalsUsingGPA(): Promise<GetAllProposalsResponse> {
+  const { program } = getProgram();
+
+  try {
+    console.log('📥 Fetching all proposals using getProgramAccounts...');
+    
+    // Fetch all proposal accounts at once
+    const proposals = await program.account.proposalAccount.all();
+
+    console.log(`✅ Found ${proposals.length} proposals`);
+
+    const formattedProposals: ProposalAccount[] = proposals.map(({ account, publicKey }) => {
+      // Use type assertion with your existing ProposalInfo type
+      const proposalData = account as unknown as ProposalInfo;
+      
+      return {
+        publicKey: publicKey.toString(),
+        proposalId: Number(proposalData.proposalId),
+        title: proposalData.title,
+        description: proposalData.description,
+        proposer: proposalData.proposer.toString(),
+        status: Object.keys(proposalData.status)[0],
+        proposalType: Object.keys(proposalData.proposalType)[0],
+        votingPeriodDays: proposalData.votingPeriodDays,
+        createdAt: Number(proposalData.createdAt),
+        votingEndsAt: Number(proposalData.votingEndsAt),
+        finalizedAt: Number(proposalData.finalizedAt),
+        executedAt: Number(proposalData.executedAt),
+        timelockEnd: Number(proposalData.timelockEnd),
+        yesVotes: Number(proposalData.yesVotes),
+        noVotes: Number(proposalData.noVotes),
+        abstainVotes: Number(proposalData.abstainVotes),
+        totalVoters: proposalData.totalVoters,
+        depositAmount: Number(proposalData.depositAmount),
+        depositRefunded: proposalData.depositRefunded,
+      };
+    });
+
+    // Sort by proposal ID (ascending)
+    formattedProposals.sort((a, b) => a.proposalId - b.proposalId);
+
+    return {
+      success: true,
+      count: formattedProposals.length,
+      proposals: formattedProposals,
+    };
+  } catch (error) {
+    console.error('❌ Error fetching proposals:', error);
+    throw error;
+  }
+}
+
 export async function getVoteRecord(proposalId: number, userPublicKey: string) {
   const { program } = getProgram();
   const userPubKey = new PublicKey(userPublicKey);

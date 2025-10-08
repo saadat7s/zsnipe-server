@@ -14,6 +14,7 @@ import {
   getGovernanceInfoInterface,
   getProposalInfoInterface,
   listProposalsInterface,
+  getAllProposalsController,
   getVoteRecordInterface,
   getProposalFinalizationStatusInterface,
   checkUserTokenBalanceInterface,
@@ -385,6 +386,95 @@ router.get('/data/eligibility', checkEligibilityInterface);
  *         description: List of proposals
  */
 router.get('/data/proposals', listProposalsInterface);
+
+/**
+ * @swagger
+ * /api/zSnipe/data/proposals/all:
+ *   get:
+ *     summary: Get all proposals using getProgramAccounts (optimized)
+ *     tags: [Proposal Data]
+ *     responses:
+ *       200:
+ *         description: All proposals retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: number
+ *                   description: Number of proposals found
+ *                 proposals:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       publicKey:
+ *                         type: string
+ *                         description: Proposal account public key
+ *                       proposalId:
+ *                         type: number
+ *                         description: Unique proposal identifier
+ *                       title:
+ *                         type: string
+ *                         description: Proposal title
+ *                       description:
+ *                         type: string
+ *                         description: Proposal description
+ *                       proposer:
+ *                         type: string
+ *                         description: Proposer's public key
+ *                       status:
+ *                         type: string
+ *                         description: Current proposal status
+ *                       proposalType:
+ *                         type: string
+ *                         description: Type of proposal
+ *                       votingPeriodDays:
+ *                         type: number
+ *                         description: Voting period in days
+ *                       createdAt:
+ *                         type: number
+ *                         description: Creation timestamp
+ *                       votingEndsAt:
+ *                         type: number
+ *                         description: Voting end timestamp
+ *                       finalizedAt:
+ *                         type: number
+ *                         description: Finalization timestamp
+ *                       executedAt:
+ *                         type: number
+ *                         description: Execution timestamp
+ *                       timelockEnd:
+ *                         type: number
+ *                         description: Timelock end timestamp
+ *                       yesVotes:
+ *                         type: number
+ *                         description: Number of yes votes
+ *                       noVotes:
+ *                         type: number
+ *                         description: Number of no votes
+ *                       abstainVotes:
+ *                         type: number
+ *                         description: Number of abstain votes
+ *                       totalVoters:
+ *                         type: number
+ *                         description: Total number of voters
+ *                       depositAmount:
+ *                         type: number
+ *                         description: Proposal deposit amount
+ *                       depositRefunded:
+ *                         type: boolean
+ *                         description: Whether deposit was refunded
+ *       400:
+ *         description: Error fetching proposals
+ *       500:
+ *         description: Server error
+ */
+router.get('/data/proposals/all', getAllProposalsController);
+
 
 /**
  * @swagger
@@ -845,6 +935,7 @@ router.post('/admin/fund-treasury', fundTreasuryInterface);
  *         description: Server error
  */
 router.get('/data/treasury-account', getTreasuryAccountInterfaceController);
+
 
 // Execution data builder endpoints
 router.post('/execution-data/text', buildTextExecutionDataController);

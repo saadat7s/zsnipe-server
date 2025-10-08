@@ -16,6 +16,7 @@ import {
   getGovernanceAccountInfo,
   getProposalInfo,
   getAllProposals,
+  getAllProposalsUsingGPA,
   getVoteRecord,
   getProposalFinalizationStatus,
   checkUserTokenBalance,
@@ -679,5 +680,23 @@ export async function buildParameterExecutionDataController(req: Request, res: R
     res.status(200).json({ success: true, data: { executionData: data, length: data.length } });
   } catch (error: any) {
     res.status(400).json({ success: false, error: error?.message || 'Failed to build parameter execution data' });
+  }
+}
+
+export async function getAllProposalsController(req: Request, res: Response) {
+  try {
+    const result = await getAllProposalsUsingGPA();
+    
+    if (result.success) {
+      res.json(result);
+    } else {
+      res.status(400).json(result);
+    }
+  } catch (error: any) {
+    console.error("Error in getAllProposalsController:", error);
+    res.status(500).json({
+      success: false,
+      message: `Error fetching all proposals: ${error.message || error}`
+    });
   }
 }
