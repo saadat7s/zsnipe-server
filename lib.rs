@@ -22,15 +22,14 @@ pub const MAX_DESCRIPTION_LENGTH: usize = 1000;
 pub const MAX_EXECUTION_DATA_LENGTH: usize = 500;
 
 // Voting configuration parameters
-pub const VOTING_PERIOD_3_DAYS: u8 = 0;
-pub const VOTING_PERIOD_7_DAYS: u8 = 0;
-pub const VOTING_PERIOD_14_DAYS: u8 = 0;
+pub const VOTING_PERIOD_3_DAYS: u8 = 0; // 5 minutes
+pub const VOTING_PERIOD_7_DAYS: u8 = 1; // 15 minutes
+pub const VOTING_PERIOD_14_DAYS: u8 = 2; // 25 minutes
 pub const VALID_VOTING_PERIODS: [u8; 3] = [
     VOTING_PERIOD_3_DAYS,
     VOTING_PERIOD_7_DAYS,
     VOTING_PERIOD_14_DAYS,
 ];
-
 pub const QUORUM_PERCENTAGE: u64 = 10;
 pub const PASSING_THRESHOLD_PERCENTAGE: u64 = 51;
 pub const TIME_LOCK_DURATION: i64 = 0 * 86400;
@@ -787,9 +786,9 @@ fn transfer_deposit_to_proposer<'info>(
 
 fn get_voting_duration_seconds(period_index: u8) -> Result<i64> {
     match period_index {
-        0 => Ok(300), // 5 minutes for testing
-        1 => Ok(600), // 10 minutes for testing
-        2 => Ok(900), // 15 minutes for testing
+        0 => Ok(300),  // 5 minutes for testing
+        1 => Ok(900),  // 15 minutes for testing
+        2 => Ok(1500), // 25 minutes for testing
         _ => Err(ErrorCode::InvalidVotingPeriod.into()),
     }
 }
@@ -1312,7 +1311,7 @@ pub enum ErrorCode {
     #[msg("Tokens are currently locked for governance participation")]
     TokensLockedForGovernance,
     #[msg(
-        "Insufficient stake amount to create proposal - minimum 10,000 ZSNIPE tokens must be staked"
+        "Insufficient stake amount to create proposal - minimum 100 ZSNIPE tokens must be staked"
     )]
     InsufficientStakeToPropose,
     #[msg("Insufficient stake duration to create proposal - minimum 30 days required")]
