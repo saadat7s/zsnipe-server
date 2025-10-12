@@ -1,5 +1,15 @@
 import { Request, Response } from 'express';
 import { 
+  MIN_STAKE_TO_PROPOSE,
+  MIN_STAKE_DURATION_TO_PROPOSE,
+  PROPOSAL_DEPOSIT_AMOUNT
+} from '../services/staking/constants';
+import { 
+  buildTextExecutionData,
+  buildTreasuryTransferExecutionData,
+  buildParameterUpdateExecutionData
+} from '../services/staking/helpers';
+import { 
   createInitializeStakingPoolTransaction,
   createStakeTokensTransaction,
   createUnstakeTokensTransaction,
@@ -22,9 +32,6 @@ import {
   checkUserTokenBalance,
   calculateHybridVotingPower,
   checkVotingEligibility,
-  MIN_STAKE_TO_PROPOSE,
-  MIN_STAKE_DURATION_TO_PROPOSE,
-  PROPOSAL_DEPOSIT_AMOUNT,
   createInitializeTreasuryTransaction,
   createFundTreasuryTransaction,
   getTreasuryAccountInterface,
@@ -32,9 +39,6 @@ import {
   createExecuteTreasuryTransferTransaction,
   createExecuteParameterUpdateTransaction,
   createExecuteProposalSmartTransaction,
-  buildTextExecutionData,
-  buildTreasuryTransferExecutionData,
-  buildParameterUpdateExecutionData,
 } from '../services/staking/servicesInterface';
 import { VoteChoice } from '../services/types';
 import { PublicKey } from '@solana/web3.js';
