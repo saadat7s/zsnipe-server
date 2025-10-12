@@ -1,6 +1,18 @@
 import { Request, Response } from 'express';
 import { getMockWalletKeypair } from '../services/staking/mockWallets';
 import { 
+  MIN_STAKE_TO_PROPOSE,
+  MIN_STAKE_DURATION_TO_PROPOSE,
+  PROPOSAL_DEPOSIT_AMOUNT
+} from '../services/staking/constants';
+import { 
+  getTreasuryAccount,
+  decodeParameterUpdateExecutionData,
+  decodeTreasuryTransferExecutionData,
+  buildTreasuryTransferExecutionData,
+  buildParameterUpdateExecutionData
+} from '../services/staking/helpers';
+import { 
   initializeStakingPool, 
   stakeTokens, 
   getStakingPoolInfo, 
@@ -18,9 +30,6 @@ import {
   bulkInitGovernanceAccounts,
   initializeProposalEscrow,
   createProposal,
-  MIN_STAKE_TO_PROPOSE,
-  MIN_STAKE_DURATION_TO_PROPOSE,
-  PROPOSAL_DEPOSIT_AMOUNT,
   getAllProposals,
   getProposalInfo,
   bulkCastVote,
@@ -40,11 +49,6 @@ import {
   getAdminTreasuryAccount,
   initializeTreasury,
   fundTreasury,
-  getTreasuryAccount,
-  decodeParameterUpdateExecutionData,
-  decodeTreasuryTransferExecutionData,
-  buildTreasuryTransferExecutionData,
-  buildParameterUpdateExecutionData,
 } from '../services/staking/services';
 import { VoteChoice } from '../services/types';
 
