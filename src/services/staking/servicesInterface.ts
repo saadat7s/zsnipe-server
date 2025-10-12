@@ -145,6 +145,15 @@ export function getVoteRecordPda(
   );
 }
 
+function getProposalTypeEnum(proposalType: number) {
+  switch (proposalType) {
+    case 0: return { text: {} };
+    case 1: return { treasuryTransfer: {} };
+    case 2: return { parameterUpdate: {} };
+    default: throw new Error(`Invalid proposal type: ${proposalType}`);
+  }
+}
+
 // === Initialize Staking Pool (Admin only) ===
 export async function createInitializeStakingPoolTransaction(adminPublicKey: PublicKey) {
   const { program, connection } = getProgram()
@@ -512,7 +521,7 @@ export async function createProposalTransaction(
         new anchor.BN(proposalId),
         title,
         description,
-        { text: {} }, // ProposalType enum - adjust based on proposalType param
+        getProposalTypeEnum(proposalType),
         Buffer.from(executionData),
         votingPeriod
       )
