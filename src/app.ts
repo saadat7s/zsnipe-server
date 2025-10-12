@@ -6,7 +6,18 @@ import dotenv from 'dotenv';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './config/swagger';
 import stakingRoute from './routes/stakingRoute';
-import routeInterface from './routes/routesInterface';
+import governanceRoutes from './routes/governanceRoutes';
+import proposalRoutes from './routes/proposalRoutes';
+import treasuryRoutes from './routes/treasuryRoutes';
+import executionRoutes from './routes/executionRoutes';
+import governanceConfigRoutes from './routes/governanceConfigRoutes';
+import stakingInterfaceRoutes from './routesInterface/stakingInterfaceRoutes';
+import governanceInterfaceRoutes from './routesInterface/governanceInterfaceRoutes';
+import proposalInterfaceRoutes from './routesInterface/proposalInterfaceRoutes';
+import executionInterfaceRoutes from './routesInterface/executionInterfaceRoutes';
+import treasuryInterfaceRoutes from './routesInterface/treasuryInterfaceRoutes';
+import governanceConfigInterfaceRoutes from './routesInterface/governanceConfigInterfaceRoutes';
+import executionDataInterfaceRoutes from './routesInterface/executionDataInterfaceRoutes';
 
 dotenv.config();
 
@@ -40,7 +51,20 @@ app.get('/api-docs.json', (req, res) => {
 
 // API routes
 app.use('/api/staking', stakingRoute);
-app.use('/api/zSnipe', routeInterface);
+app.use('/api/governance', governanceRoutes);
+app.use('/api/proposals', proposalRoutes);
+app.use('/api/treasury', treasuryRoutes);
+app.use('/api/execution', executionRoutes);
+app.use('/api/governance-config', governanceConfigRoutes);
+
+// Modular Interface routes
+app.use('/api/zSnipe/staking', stakingInterfaceRoutes);
+app.use('/api/zSnipe/governance', governanceInterfaceRoutes);
+app.use('/api/zSnipe/proposals', proposalInterfaceRoutes);
+app.use('/api/zSnipe/execution', executionInterfaceRoutes);
+app.use('/api/zSnipe/treasury', treasuryInterfaceRoutes);
+app.use('/api/zSnipe/governance-config', governanceConfigInterfaceRoutes);
+app.use('/api/zSnipe/execution-data', executionDataInterfaceRoutes);
 
 // Basic routes
 app.get('/', (req, res) => {
