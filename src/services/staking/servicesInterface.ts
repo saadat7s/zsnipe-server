@@ -39,7 +39,8 @@ import {
   getProposalTypeEnum,
   buildTextExecutionData,
   buildTreasuryTransferExecutionData,
-  buildParameterUpdateExecutionData
+  buildParameterUpdateExecutionData,
+  getTreasuryAccount
 } from "./helpers";
 
 
@@ -1417,14 +1418,12 @@ export async function createFundTreasuryTransaction(adminPublicKey: PublicKey, a
 
 // === Get Treasury Account (read-only) ===
 export async function getTreasuryAccountInterface() {
-  const { program } = getProgram();
-  const [stakingPool] = getStakingPoolPda(program.programId);
-  const [treasuryAccount] = getTreasuryPda(program.programId, stakingPool);
+  const treasuryAccount = await getTreasuryAccount();
 
   return {
     success: true,
     data: {
-      address: treasuryAccount.toString(),
+      address: treasuryAccount.address,
     }
   };
 }
