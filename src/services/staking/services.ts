@@ -1,8 +1,6 @@
 import {
-  Connection,
   Keypair,
   PublicKey,
-  LAMPORTS_PER_SOL,
   sendAndConfirmTransaction,
   SystemProgram,
   Transaction
@@ -10,7 +8,6 @@ import {
 
 import * as anchor from "@coral-xyz/anchor";
 import { 
-  createMint,
   ASSOCIATED_TOKEN_PROGRAM_ID, 
   TOKEN_2022_PROGRAM_ID, 
   createAssociatedTokenAccountInstruction, 
@@ -31,35 +28,10 @@ import {
   getVoteRecordPda,
 } from "./getPDAs";
 import { getProgram } from "./getProgram";
+import { getMockWalletKeypair, getAllMockWallets } from "./mockWallets";
 
 
 
-// Helper function to get mock wallet keypair by wallet number (1-10)
-export const getMockWalletKeypair = (walletNumber: number) => {
-  if (walletNumber < 1 || walletNumber > 10) {
-    throw new Error("Wallet number must be between 1 and 10");
-  }
-  const walletFile = require(`./ZSNIPE_wallet_${walletNumber}.json`);
-  return Keypair.fromSecretKey(new Uint8Array(walletFile));
-};
-
-// Helper function to get all mock wallets
-export const getAllMockWallets = () => {
-  const wallets = [];
-  for (let i = 1; i <= 10; i++) {
-    try {
-      const keypair = getMockWalletKeypair(i);
-      wallets.push({
-        walletNumber: i,
-        publicKey: keypair.publicKey,
-        keypair: keypair
-      });
-    } catch (error) {
-      console.warn(`Could not load wallet ${i}:`, error);
-    }
-  }
-  return wallets;
-};
 
 
 // // Governance constants
