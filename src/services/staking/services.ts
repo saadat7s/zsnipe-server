@@ -39,7 +39,10 @@ import {
   getProposalTypeEnum,
   buildTextExecutionData,
   buildTreasuryTransferExecutionData,
-  buildParameterUpdateExecutionData
+  buildParameterUpdateExecutionData,
+  getTreasuryAccount,
+  decodeTreasuryTransferExecutionData,
+  decodeParameterUpdateExecutionData
 } from "./helpers";
 
 // === Initialize Staking Pool ===
@@ -2388,61 +2391,11 @@ export async function fundTreasury(amount: number) {
 }
 
 
-export async function getTreasuryAccount() {
-  const { program } = getProgram();
-  const [stakingPool] = getStakingPoolPda(program.programId);
-  const [treasuryAccount] = getTreasuryPda(program.programId, stakingPool);
-
-  return {
-    address: treasuryAccount.toString(),
-    publicKey: treasuryAccount,
-  };
-}
 
 // ============================================================================
 // DECODE EXECUTION DATA (for previewing what a proposal will do)
 // ============================================================================
 
-export function decodeTreasuryTransferExecutionData(executionData: number[]) {
-  if (executionData.length !== 40) {
-    throw new Error(`Invalid treasury transfer data length: ${executionData.length}`);
-  }
-
-  const recipientBytes = executionData.slice(0, 32);
-  const recipient = new PublicKey(Buffer.from(recipientBytes));
-
-  const amountBytes = Buffer.from(executionData.slice(32, 40));
-  const amount = Number(amountBytes.readBigUInt64LE(0));
-
-  return {
-    recipient: recipient.toString(),
-    amountMicroTokens: amount,
-    amountTokens: amount / 1_000_000,
-  };
-}
-
-export function decodeParameterUpdateExecutionData(executionData: number[]) {
-  if (executionData.length !== 9) {
-    throw new Error(`Invalid parameter update data length: ${executionData.length}`);
-  }
-
-  const parameterId = executionData[0];
-  const valueBytes = Buffer.from(executionData.slice(1, 9));
-  const value = Number(valueBytes.readBigUInt64LE(0));
-
-  const paramNames = [
-    "Quorum Percentage",
-    "Passing Threshold",
-    "Timelock Duration (seconds)",
-  ];
-  const paramName = paramNames[parameterId] || "Unknown";
-
-  return {
-    parameterId,
-    parameterName: paramName,
-    newValue: value,
-  };
-}
 
 export async function getProposalExecutionPreview(proposalId: number) {
   try {
