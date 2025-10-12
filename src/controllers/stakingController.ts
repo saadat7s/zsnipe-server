@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { getMockWalletKeypair } from '../services/staking/mockWallets';
 import { 
   initializeStakingPool, 
   stakeTokens, 
@@ -12,7 +13,6 @@ import {
   checkVotingEligibility, 
   getGovernanceAccountInfo, 
   getCompleteUserGovernanceData,
-  getMockWalletKeypair,
   getAllWalletsStatus,
   bulkStakeTokens,
   bulkInitGovernanceAccounts,
