@@ -140,3 +140,16 @@ export interface ProposalInfo {
   reserved: number[];                // [u8; 32]
   proposalAccount: string;           // PDA address as base58 string
 }
+
+export interface GovernanceConfig {
+  authority: PublicKey;
+  quorumPercentage: BN;
+  passingThreshold: BN;
+  timelockDuration: BN;
+  minStakeToPropose: BN;
+  proposalDeposit: BN;
+  createdAt: BN;
+  lastUpdated: BN;
+  bump: number;
+  reserved: number[];
+}
