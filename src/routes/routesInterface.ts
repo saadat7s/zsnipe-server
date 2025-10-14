@@ -30,7 +30,9 @@ import {
   executeProposalSmartInterface,
   buildTextExecutionDataController,
   buildTreasuryExecutionDataControllerInterface,
-  buildParameterExecutionDataController
+  buildParameterExecutionDataController,
+  decodeTreasuryExecutionDataController,
+  decodeParameterExecutionDataController
 } from '../controllers/servicesInterfaceController';
 
 const router = Router();
@@ -941,5 +943,109 @@ router.get('/data/treasury-account', getTreasuryAccountInterfaceController);
 router.post('/execution-data/text', buildTextExecutionDataController);
 router.post('/execution-data/treasury', buildTreasuryExecutionDataControllerInterface);
 router.post('/execution-data/parameter', buildParameterExecutionDataController);
+
+/**
+ * @swagger
+ * /api/zSnipe/execution-data/decode/treasury:
+ *   post:
+ *     summary: Decode treasury execution data
+ *     tags: [Execution Data]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - executionData
+ *             properties:
+ *               executionData:
+ *                 type: array
+ *                 items:
+ *                   type: number
+ *                 description: Encoded execution data array
+ *                 example: [1, 2, 3, 4, 5]
+ *     responses:
+ *       200:
+ *         description: Treasury execution data decoded successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   description: Decoded treasury execution data
+ *       400:
+ *         description: Invalid input
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 error:
+ *                   type: string
+ *                   description: Error message
+ *       500:
+ *         description: Server error
+ */
+router.post('/execution-data/decode/treasury', decodeTreasuryExecutionDataController);
+
+/**
+ * @swagger
+ * /api/zSnipe/execution-data/decode/parameter:
+ *   post:
+ *     summary: Decode parameter execution data
+ *     tags: [Execution Data]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - executionData
+ *             properties:
+ *               executionData:
+ *                 type: array
+ *                 items:
+ *                   type: number
+ *                 description: Encoded execution data array
+ *                 example: [1, 2, 3, 4, 5]
+ *     responses:
+ *       200:
+ *         description: Parameter execution data decoded successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   description: Decoded parameter execution data
+ *       400:
+ *         description: Invalid input
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 error:
+ *                   type: string
+ *                   description: Error message
+ *       500:
+ *         description: Server error
+ */
+router.post('/execution-data/decode/parameter', decodeParameterExecutionDataController);
 
 export default router;
