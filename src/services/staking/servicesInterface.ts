@@ -1678,3 +1678,83 @@ export async function getGovernanceConfig() {
     };
   }
 }
+
+// === Get All Active Stakers ===
+export async function getAllActiveStakers() {
+  const { program } = getProgram();
+
+  try {
+    console.log('📥 Fetching all active stakers...');
+    
+    // Fetch all user staking accounts
+    const stakingAccounts = await program.account.userStakingAccount.all();
+    
+    console.log(`✅ Found ${stakingAccounts.length} staking accounts`);
+
+    // Filter for active stakers (those with staked amount > 0)
+    const activeStakers = stakingAccounts
+      .filter(({ account }) => {
+        const stakingData = account as unknown as UserStakingAccount;
+        return stakingData.stakedAmount.toNumber() > 0;
+      })
+      .map(({ account, publicKey }) => {
+        const stakingData = account as unknown as UserStakingAccount;
+        const currentTime = Math.floor(Date.now() / 1000);
+        const stakeDurationSeconds = currentTime - stakingData.timestamp.toNumber();
+        const stakeDurationDays = Math.floor(stakeDurationSeconds / 86400);
+        
+        // Calculate voting power using the same formula as in the smart contract
+        const votingPower = calculateHybridVotingPower(
+          stakingData.stakedAmount.toNumber(), // Pass microtokens directly
+          stakeDurationDays
+        );
+
+        return {
+          stakerAddress: stakingData.staker.toString(),
+          stakingAccountAddress: publicKey.toString(),
+          stakedAmount: stakingData.stakedAmount.toNumber() / 1_000_000, // Convert to tokens
+          stakedAmountMicroTokens: stakingData.stakedAmount.toNumber(),
+          stakeTimestamp: stakingData.timestamp.toNumber(),
+          lastUpdated: stakingData.lastUpdated.toNumber(),
+          stakeDurationDays: stakeDurationDays,
+          stakeDurationSeconds: stakeDurationSeconds,
+          votingPower: votingPower,
+          stakedAt: new Date(stakingData.timestamp.toNumber() * 1000).toISOString(),
+          lastUpdatedAt: new Date(stakingData.lastUpdated.toNumber() * 1000).toISOString(),
+        };
+      });
+
+    // Sort by staked amount (descending)
+    activeStakers.sort((a, b) => b.stakedAmount - a.stakedAmount);
+
+    const totalStakedAmount = activeStakers.reduce((sum, staker) => sum + staker.stakedAmount, 0);
+    const totalVotingPower = activeStakers.reduce((sum, staker) => sum + staker.votingPower, 0);
+
+    console.log(`📊 Active Stakers Summary:`);
+    console.log(`   Total Active Stakers: ${activeStakers.length}`);
+    console.log(`   Total Staked Amount: ${totalStakedAmount.toLocaleString()} ZSNIPE`);
+    console.log(`   Total Voting Power: ${totalVotingPower.toLocaleString()}`);
+
+    return {
+      success: true,
+      data: {
+        activeStakers: activeStakers,
+        summary: {
+          totalActiveStakers: activeStakers.length,
+          totalStakedAmount: totalStakedAmount,
+          totalVotingPower: totalVotingPower,
+          averageStakeAmount: activeStakers.length > 0 ? totalStakedAmount / activeStakers.length : 0,
+          averageVotingPower: activeStakers.length > 0 ? totalVotingPower / activeStakers.length : 0,
+        }
+      },
+      count: activeStakers.length
+    };
+  } catch (error: any) {
+    console.error('❌ Error fetching active stakers:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to fetch active stakers',
+      count: 0
+    };
+  }
+}
