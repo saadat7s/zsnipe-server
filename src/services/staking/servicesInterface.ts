@@ -15,7 +15,7 @@ import {
   createTransferInstruction
 } from "@solana/spl-token";
 
-import { StakingPool, UserStakingAccount, GovernanceAccount, VoteRecord, VoteChoice, ProposalInfo } from "../types";
+import { StakingPool, UserStakingAccount, GovernanceAccount, VoteRecord, VoteChoice, ProposalInfo, GovernanceConfig } from "../types";
 
 // Helper function to get the program
 export const getProgram = () => {
@@ -1590,11 +1590,14 @@ export function buildTextExecutionData(metadata?: string): number[] {
 
 export function buildTreasuryTransferExecutionData(
   recipientAddress: string,
-  amountMicroTokens: number
+  amountTokens: number
 ): number[] {
-  if (!recipientAddress || amountMicroTokens <= 0) {
+  if (!recipientAddress || amountTokens <= 0) {
     throw new Error("Invalid treasury transfer parameters");
   }
+
+  // Convert regular token amount to microtokens (multiply by 1,000,000)
+  const amountMicroTokens = Math.floor(amountTokens * 1_000_000);
 
   const recipientPubkey = new PublicKey(recipientAddress);
   const recipientBytes = Array.from(recipientPubkey.toBytes());
@@ -1630,4 +1633,48 @@ export function buildParameterUpdateExecutionData(
   const valueBytes = Array.from(valueBuffer);
 
   return [...parameterIdByte, ...valueBytes];
+}
+
+// === Get Governance Config ===
+export async function getGovernanceConfig() {
+  const { program } = getProgram();
+  const [governanceConfig] = getGovernanceConfigPda(program.programId);
+
+  try {
+    const configInfo = await program.account.governanceConfig.fetch(governanceConfig) as GovernanceConfig;
+    
+    console.log("=== Governance Configuration ===");
+    console.log(`Authority: ${configInfo.authority.toString()}`);
+    console.log(`Quorum Percentage: ${configInfo.quorumPercentage}%`);
+    console.log(`Passing Threshold: ${configInfo.passingThreshold}%`);
+    console.log(`Timelock Duration: ${configInfo.timelockDuration} seconds`);
+    console.log(`Min Stake to Propose: ${configInfo.minStakeToPropose}`);
+    console.log(`Proposal Deposit: ${configInfo.proposalDeposit}`);
+    console.log(`Created At: ${new Date(configInfo.createdAt.toNumber() * 1000)}`);
+    console.log(`Last Updated: ${new Date(configInfo.lastUpdated.toNumber() * 1000)}`);
+
+    return {
+      success: true,
+      data: {
+        authority: configInfo.authority.toString(),
+        quorumPercentage: configInfo.quorumPercentage.toNumber(),
+        passingThreshold: configInfo.passingThreshold.toNumber(),
+        timelockDuration: configInfo.timelockDuration.toNumber(),
+        minStakeToPropose: configInfo.minStakeToPropose.toNumber(),
+        proposalDeposit: configInfo.proposalDeposit.toNumber(),
+        createdAt: configInfo.createdAt.toNumber(),
+        lastUpdated: configInfo.lastUpdated.toNumber(),
+        bump: configInfo.bump,
+        governanceConfigAddress: governanceConfig.toString()
+      },
+      governanceConfig: governanceConfig.toString()
+    };
+  } catch (error: any) {
+    console.error("Error fetching governance config:", error);
+    return {
+      success: false,
+      error: error.message || "Failed to fetch governance configuration",
+      governanceConfig: governanceConfig.toString()
+    };
+  }
 }
