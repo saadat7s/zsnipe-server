@@ -1164,18 +1164,21 @@ export const getTreasuryAccountController = async (req: Request, res: Response) 
  */
 export const buildTreasuryExecutionDataController = async (req: Request, res: Response) => {
   try {
-    const { recipientAddress, amountMicroTokens } = req.body;
+    const { recipientAddress, amountTokens } = req.body;
 
-    if (!recipientAddress || !amountMicroTokens) {
+    if (!recipientAddress || !amountTokens) {
       return res.status(400).json({
         success: false,
-        error: 'recipientAddress and amountMicroTokens are required',
+        error: 'recipientAddress and amountTokens are required',
       });
     }
 
+    const amountTokensNumber = Number(amountTokens);
+    const amountMicroTokens = Math.floor(amountTokensNumber * 1_000_000);
+
     const executionData = buildTreasuryTransferExecutionData(
       recipientAddress,
-      Number(amountMicroTokens)
+      amountTokensNumber
     );
 
     return res.status(200).json({
@@ -1184,8 +1187,8 @@ export const buildTreasuryExecutionDataController = async (req: Request, res: Re
         executionData,
         length: executionData.length,
         recipient: recipientAddress,
-        amountMicroTokens: Number(amountMicroTokens),
-        amountTokens: Number(amountMicroTokens) / 1_000_000,
+        amountTokens: amountTokensNumber,
+        amountMicroTokens: amountMicroTokens,
       },
     });
   } catch (error: any) {
