@@ -36,6 +36,7 @@ import {
   buildTreasuryTransferExecutionData,
   buildParameterUpdateExecutionData,
   getGovernanceConfig,
+  getAllActiveStakers,
 } from '../services/staking/servicesInterface';
 import { VoteChoice } from '../services/types';
 import { PublicKey } from '@solana/web3.js';
@@ -788,6 +789,26 @@ export async function getGovernanceConfigInterface(req: Request, res: Response) 
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to fetch governance configuration',
+    });
+  }
+}
+
+// Get All Active Stakers
+export async function getAllActiveStakersInterface(req: Request, res: Response) {
+  try {
+    const result = await getAllActiveStakers();
+    
+    if (result.success) {
+      res.status(200).json(result);
+    } else {
+      res.status(500).json(result);
+    }
+  } catch (error: any) {
+    console.error('Error in getAllActiveStakersInterface:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch active stakers',
+      count: 0
     });
   }
 }
