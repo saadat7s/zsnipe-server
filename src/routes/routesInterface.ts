@@ -33,7 +33,8 @@ import {
   buildParameterExecutionDataController,
   decodeTreasuryExecutionDataController,
   decodeParameterExecutionDataController,
-  getGovernanceConfigInterface
+  getGovernanceConfigInterface,
+  getAllActiveStakersInterface
 } from '../controllers/servicesInterfaceController';
 
 const router = Router();
@@ -423,6 +424,104 @@ router.get('/data/eligibility', checkEligibilityInterface);
  *         description: Server error
  */
 router.get('/data/governance-config', getGovernanceConfigInterface);
+
+/**
+ * @swagger
+ * /api/zSnipe/data/active-stakers:
+ *   get:
+ *     summary: Get all active stakers in the system
+ *     tags: [Staking Data]
+ *     responses:
+ *       200:
+ *         description: List of all active stakers with their details
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     activeStakers:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           stakerAddress:
+ *                             type: string
+ *                             description: Staker's wallet address
+ *                           stakingAccountAddress:
+ *                             type: string
+ *                             description: Staking account PDA address
+ *                           stakedAmount:
+ *                             type: number
+ *                             description: Staked amount in ZSNIPE tokens
+ *                           stakedAmountMicroTokens:
+ *                             type: number
+ *                             description: Staked amount in microtokens
+ *                           stakeTimestamp:
+ *                             type: number
+ *                             description: Unix timestamp when staked
+ *                           lastUpdated:
+ *                             type: number
+ *                             description: Unix timestamp of last update
+ *                           stakeDurationDays:
+ *                             type: number
+ *                             description: Days since staking
+ *                           stakeDurationSeconds:
+ *                             type: number
+ *                             description: Seconds since staking
+ *                           votingPower:
+ *                             type: number
+ *                             description: Calculated voting power
+ *                           stakedAt:
+ *                             type: string
+ *                             description: ISO timestamp when staked
+ *                           lastUpdatedAt:
+ *                             type: string
+ *                             description: ISO timestamp of last update
+ *                     summary:
+ *                       type: object
+ *                       properties:
+ *                         totalActiveStakers:
+ *                           type: number
+ *                           description: Total number of active stakers
+ *                         totalStakedAmount:
+ *                           type: number
+ *                           description: Total staked amount in ZSNIPE
+ *                         totalVotingPower:
+ *                           type: number
+ *                           description: Total voting power
+ *                         averageStakeAmount:
+ *                           type: number
+ *                           description: Average stake amount per staker
+ *                         averageVotingPower:
+ *                           type: number
+ *                           description: Average voting power per staker
+ *                 count:
+ *                   type: number
+ *                   description: Number of active stakers
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 error:
+ *                   type: string
+ *                   description: Error message
+ *                 count:
+ *                   type: number
+ *                   example: 0
+ */
+router.get('/data/active-stakers', getAllActiveStakersInterface);
 
 /**
  * @swagger
