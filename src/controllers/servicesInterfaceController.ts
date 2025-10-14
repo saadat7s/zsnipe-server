@@ -35,6 +35,7 @@ import {
   buildTextExecutionData,
   buildTreasuryTransferExecutionData,
   buildParameterUpdateExecutionData,
+  getGovernanceConfig,
 } from '../services/staking/servicesInterface';
 import { VoteChoice } from '../services/types';
 import { PublicKey } from '@solana/web3.js';
@@ -659,12 +660,25 @@ export async function buildTextExecutionDataController(req: Request, res: Respon
 
 export async function buildTreasuryExecutionDataControllerInterface(req: Request, res: Response) {
   try {
-    const { recipientAddress, amountMicroTokens } = req.body || {};
-    if (!recipientAddress || !amountMicroTokens) {
-      return res.status(400).json({ success: false, error: 'recipientAddress and amountMicroTokens are required' });
+    const { recipientAddress, amountTokens } = req.body || {};
+    if (!recipientAddress || !amountTokens) {
+      return res.status(400).json({ success: false, error: 'recipientAddress and amountTokens are required' });
     }
-    const data = buildTreasuryTransferExecutionData(recipientAddress, Number(amountMicroTokens));
-    res.status(200).json({ success: true, data: { executionData: data, length: data.length } });
+    
+    const amountTokensNumber = Number(amountTokens);
+    const amountMicroTokens = Math.floor(amountTokensNumber * 1_000_000);
+    
+    const data = buildTreasuryTransferExecutionData(recipientAddress, amountTokensNumber);
+    res.status(200).json({ 
+      success: true, 
+      data: { 
+        executionData: data, 
+        length: data.length,
+        recipient: recipientAddress,
+        amountTokens: amountTokensNumber,
+        amountMicroTokens: amountMicroTokens
+      } 
+    });
   } catch (error: any) {
     res.status(400).json({ success: false, error: error?.message || 'Failed to build treasury execution data' });
   }
@@ -755,6 +769,25 @@ export async function decodeParameterExecutionDataController(req: Request, res: 
     return res.status(400).json({
       success: false,
       error: error.message,
+    });
+  }
+}
+
+// Get Governance Config
+export async function getGovernanceConfigInterface(req: Request, res: Response) {
+  try {
+    const result = await getGovernanceConfig();
+    
+    if (result.success) {
+      res.status(200).json(result);
+    } else {
+      res.status(404).json(result);
+    }
+  } catch (error: any) {
+    console.error('Error in getGovernanceConfigInterface:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch governance configuration',
     });
   }
 }
