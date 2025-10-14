@@ -32,7 +32,8 @@ import {
   buildTreasuryExecutionDataControllerInterface,
   buildParameterExecutionDataController,
   decodeTreasuryExecutionDataController,
-  decodeParameterExecutionDataController
+  decodeParameterExecutionDataController,
+  getGovernanceConfigInterface
 } from '../controllers/servicesInterfaceController';
 
 const router = Router();
@@ -369,6 +370,59 @@ router.get('/data/governance', getGovernanceInfoInterface);
  *         description: Voting eligibility status
  */
 router.get('/data/eligibility', checkEligibilityInterface);
+
+/**
+ * @swagger
+ * /api/zSnipe/data/governance-config:
+ *   get:
+ *     summary: Get current governance configuration
+ *     tags: [Governance Data]
+ *     responses:
+ *       200:
+ *         description: Current governance configuration parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     authority:
+ *                       type: string
+ *                       description: Authority address
+ *                     quorumPercentage:
+ *                       type: number
+ *                       description: Required quorum percentage
+ *                     passingThreshold:
+ *                       type: number
+ *                       description: Required passing threshold percentage
+ *                     timelockDuration:
+ *                       type: number
+ *                       description: Timelock duration in seconds
+ *                     minStakeToPropose:
+ *                       type: number
+ *                       description: Minimum stake required to create proposals
+ *                     proposalDeposit:
+ *                       type: number
+ *                       description: Required deposit for proposals
+ *                     createdAt:
+ *                       type: number
+ *                       description: Creation timestamp
+ *                     lastUpdated:
+ *                       type: number
+ *                       description: Last update timestamp
+ *                     governanceConfigAddress:
+ *                       type: string
+ *                       description: Governance config account address
+ *       404:
+ *         description: Governance config not found
+ *       500:
+ *         description: Server error
+ */
+router.get('/data/governance-config', getGovernanceConfigInterface);
 
 /**
  * @swagger
@@ -941,6 +995,78 @@ router.get('/data/treasury-account', getTreasuryAccountInterfaceController);
 
 // Execution data builder endpoints
 router.post('/execution-data/text', buildTextExecutionDataController);
+
+/**
+ * @swagger
+ * /api/zSnipe/execution-data/treasury:
+ *   post:
+ *     summary: Build treasury transfer execution data
+ *     tags: [Execution Data]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - recipientAddress
+ *               - amountTokens
+ *             properties:
+ *               recipientAddress:
+ *                 type: string
+ *                 description: Recipient wallet address
+ *                 example: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
+ *               amountTokens:
+ *                 type: number
+ *                 description: Amount in regular tokens (will be converted to microtokens)
+ *                 example: 50
+ *     responses:
+ *       200:
+ *         description: Treasury execution data built successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     executionData:
+ *                       type: array
+ *                       items:
+ *                         type: number
+ *                       description: Encoded execution data array
+ *                     length:
+ *                       type: number
+ *                       description: Length of execution data
+ *                     recipient:
+ *                       type: string
+ *                       description: Recipient address
+ *                     amountTokens:
+ *                       type: number
+ *                       description: Input amount in tokens
+ *                     amountMicroTokens:
+ *                       type: number
+ *                       description: Converted amount in microtokens
+ *       400:
+ *         description: Invalid input
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 error:
+ *                   type: string
+ *                   description: Error message
+ *       500:
+ *         description: Server error
+ */
 router.post('/execution-data/treasury', buildTreasuryExecutionDataControllerInterface);
 router.post('/execution-data/parameter', buildParameterExecutionDataController);
 
