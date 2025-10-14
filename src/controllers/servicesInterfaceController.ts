@@ -700,3 +700,61 @@ export async function getAllProposalsController(req: Request, res: Response) {
     });
   }
 }
+
+// === Decode Treasury Execution Data ===
+export async function decodeTreasuryExecutionDataController(req: Request, res: Response) {
+  try {
+    const { executionData } = req.body;
+
+    if (!executionData || !Array.isArray(executionData)) {
+      return res.status(400).json({
+        success: false,
+        error: 'executionData array is required',
+      });
+    }
+
+    // Import the decode function from services
+    const { decodeTreasuryTransferExecutionData } = await import('../services/staking/services');
+    const decodedData = decodeTreasuryTransferExecutionData(executionData);
+
+    return res.status(200).json({
+      success: true,
+      data: decodedData,
+    });
+  } catch (error: any) {
+    console.error('Error in decodeTreasuryExecutionDataController:', error);
+    return res.status(400).json({
+      success: false,
+      error: error.message,
+    });
+  }
+}
+
+// === Decode Parameter Execution Data ===
+export async function decodeParameterExecutionDataController(req: Request, res: Response) {
+  try {
+    const { executionData } = req.body;
+
+    if (!executionData || !Array.isArray(executionData)) {
+      return res.status(400).json({
+        success: false,
+        error: 'executionData array is required',
+      });
+    }
+
+    // Import the decode function from services
+    const { decodeParameterUpdateExecutionData } = await import('../services/staking/services');
+    const decodedData = decodeParameterUpdateExecutionData(executionData);
+
+    return res.status(200).json({
+      success: true,
+      data: decodedData,
+    });
+  } catch (error: any) {
+    console.error('Error in decodeParameterExecutionDataController:', error);
+    return res.status(400).json({
+      success: false,
+      error: error.message,
+    });
+  }
+}
