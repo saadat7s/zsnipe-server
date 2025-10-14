@@ -2081,11 +2081,14 @@ export function buildTextExecutionData(metadata?: string): number[] {
 
 export function buildTreasuryTransferExecutionData(
   recipientAddress: string,
-  amountMicroTokens: number
+  amountTokens: number
 ): number[] {
-  if (!recipientAddress || amountMicroTokens <= 0) {
+  if (!recipientAddress || amountTokens <= 0) {
     throw new Error("Invalid treasury transfer parameters");
   }
+
+  // Convert regular token amount to microtokens (multiply by 1,000,000)
+  const amountMicroTokens = Math.floor(amountTokens * 1_000_000);
 
   const recipientPubkey = new PublicKey(recipientAddress);
   const recipientBytes = Array.from(recipientPubkey.toBytes());
