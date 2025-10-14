@@ -1226,29 +1226,42 @@ export async function getProposalInfo(proposalId: number) {
   }
 }
 
-// === List All Proposals (helper function) ===
 export async function getAllProposals(maxProposalId: number = 10) {
   const { program } = getProgram();
   const proposals = [];
-
-  console.log(`Fetching proposals 0-${maxProposalId}...`);
 
   for (let i = 0; i <= maxProposalId; i++) {
     try {
       const [proposalAccount] = getProposalPda(program.programId, i);
       const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
       
+      // Get status and proposal type as strings
+      const status = Object.keys(proposalData.status)[0];
+      const proposalType = Object.keys(proposalData.proposalType)[0];
+      
       proposals.push({
+        publicKey: proposalAccount.toString(), // 👈 ADD
         proposalId: i,
         title: proposalData.title,
+        description: proposalData.description, // 👈 ADD
         proposer: proposalData.proposer.toString(),
-        status: proposalData.status,
+        status: status, // 👈 CHANGE to string
+        proposalType: proposalType, // 👈 ADD
+        executionData: Array.from(proposalData.executionData || []), // 👈 ADD - Convert Buffer to array
+        votingPeriodDays: proposalData.votingPeriodDays, // 👈 ADD
+        createdAt: Number(proposalData.createdAt), // 👈 ADD
         votingEndsAt: Number(proposalData.votingEndsAt),
-        totalVotes: Number(proposalData.yesVotes) + 
-                    Number(proposalData.noVotes) + 
-                    Number(proposalData.abstainVotes),
+        finalizedAt: Number(proposalData.finalizedAt), // 👈 ADD
+        executedAt: Number(proposalData.executedAt), // 👈 ADD
+        timelockEnd: Number(proposalData.timelockEnd), // 👈 ADD
+        yesVotes: Number(proposalData.yesVotes), // 👈 CHANGE
+        noVotes: Number(proposalData.noVotes), // 👈 ADD
+        abstainVotes: Number(proposalData.abstainVotes), // 👈 ADD
+        totalVoters: proposalData.totalVoters, // 👈 ADD
+        depositAmount: Number(proposalData.depositAmount) / 1_000_000, // 👈 ADD
+        depositRefunded: proposalData.depositRefunded, // 👈 ADD
       });
-    } catch (error) {
+    } catch (error: any) {
       // Proposal doesn't exist, skip
       continue;
     }
