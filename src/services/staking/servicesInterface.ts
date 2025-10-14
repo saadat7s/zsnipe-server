@@ -488,6 +488,33 @@ export async function createProposalTransaction(
   executionData: number[],
   votingPeriod: number
 ) {
+
+    // ✅ ADD VALIDATION HERE
+    const proposalTypeName = ['text', 'treasuryTransfer', 'parameterUpdate'][proposalType];
+  
+    // Validate execution data length based on proposal type
+    if (proposalType === 0) { // Text proposal
+      if (executionData.length !== 0) {
+        throw new Error(`Text proposals must have empty executionData (got ${executionData.length} bytes)`);
+      }
+    } else if (proposalType === 1) { // Treasury transfer
+      if (executionData.length !== 40) {
+        throw new Error(
+          `Treasury transfer proposals require exactly 40 bytes of executionData (32 bytes recipient + 8 bytes amount). Got ${executionData.length} bytes. ` +
+          `Use buildTreasuryTransferExecutionData() to create proper execution data.`
+        );
+      }
+    } else if (proposalType === 2) { // Parameter update
+      if (executionData.length !== 9) {
+        throw new Error(
+          `Parameter update proposals require exactly 9 bytes of executionData (1 byte parameter ID + 8 bytes value). Got ${executionData.length} bytes. ` +
+          `Use buildParameterUpdateExecutionData() to create proper execution data.`
+        );
+      }
+    }
+  
+    console.log(`✅ Validation passed: ${proposalTypeName} proposal with ${executionData.length} bytes execution data`);
+  
   const { program, connection } = getProgram();
   const userPubKey = new PublicKey(userPublicKey);
 
@@ -728,6 +755,7 @@ export async function getProposalInfo(proposalId: number) {
         proposer: proposalData.proposer.toString(),
         proposalType: proposalData.proposalType,
         status: proposalData.status,
+        executionData: proposalData.executionData, 
         votingPeriodDays: proposalData.votingPeriodDays,
         createdAt: Number(proposalData.createdAt),
         votingEndsAt: Number(proposalData.votingEndsAt),
@@ -760,15 +788,31 @@ export async function getAllProposals(maxProposalId: number = 10) {
       const [proposalAccount] = getProposalPda(program.programId, i);
       const proposalData = await program.account.proposalAccount.fetch(proposalAccount) as ProposalInfo;
       
+      // Get status and proposal type as strings
+      const status = Object.keys(proposalData.status)[0];
+      const proposalType = Object.keys(proposalData.proposalType)[0];
+      
       proposals.push({
+        publicKey: proposalAccount.toString(), // 👈 ADD
         proposalId: i,
         title: proposalData.title,
+        description: proposalData.description, // 👈 ADD
         proposer: proposalData.proposer.toString(),
-        status: proposalData.status,
+        status: status, // 👈 CHANGE to string
+        proposalType: proposalType, // 👈 ADD
+        executionData: Array.from(proposalData.executionData || []), // 👈 ADD - Convert Buffer to array
+        votingPeriodDays: proposalData.votingPeriodDays, // 👈 ADD
+        createdAt: Number(proposalData.createdAt), // 👈 ADD
         votingEndsAt: Number(proposalData.votingEndsAt),
-        totalVotes: Number(proposalData.yesVotes) + 
-                    Number(proposalData.noVotes) + 
-                    Number(proposalData.abstainVotes),
+        finalizedAt: Number(proposalData.finalizedAt), // 👈 ADD
+        executedAt: Number(proposalData.executedAt), // 👈 ADD
+        timelockEnd: Number(proposalData.timelockEnd), // 👈 ADD
+        yesVotes: Number(proposalData.yesVotes), // 👈 CHANGE
+        noVotes: Number(proposalData.noVotes), // 👈 ADD
+        abstainVotes: Number(proposalData.abstainVotes), // 👈 ADD
+        totalVoters: proposalData.totalVoters, // 👈 ADD
+        depositAmount: Number(proposalData.depositAmount) / 1_000_000, // 👈 ADD
+        depositRefunded: proposalData.depositRefunded, // 👈 ADD
       });
     } catch (error: any) {
       // Proposal doesn't exist, skip
@@ -782,7 +826,6 @@ export async function getAllProposals(maxProposalId: number = 10) {
     proposals,
   };
 }
-
 // Types for better type safety
 interface ProposalAccount {
   proposalId: number;
@@ -824,7 +867,6 @@ export async function getAllProposalsUsingGPA(): Promise<GetAllProposalsResponse
     console.log(`✅ Found ${proposals.length} proposals`);
 
     const formattedProposals: ProposalAccount[] = proposals.map(({ account, publicKey }) => {
-      // Use type assertion with your existing ProposalInfo type
       const proposalData = account as unknown as ProposalInfo;
       
       return {
@@ -835,6 +877,7 @@ export async function getAllProposalsUsingGPA(): Promise<GetAllProposalsResponse
         proposer: proposalData.proposer.toString(),
         status: Object.keys(proposalData.status)[0],
         proposalType: Object.keys(proposalData.proposalType)[0],
+        executionData: Array.from(proposalData.executionData || []), // 👈 HERE IT IS!
         votingPeriodDays: proposalData.votingPeriodDays,
         createdAt: Number(proposalData.createdAt),
         votingEndsAt: Number(proposalData.votingEndsAt),
@@ -845,7 +888,7 @@ export async function getAllProposalsUsingGPA(): Promise<GetAllProposalsResponse
         noVotes: Number(proposalData.noVotes),
         abstainVotes: Number(proposalData.abstainVotes),
         totalVoters: proposalData.totalVoters,
-        depositAmount: Number(proposalData.depositAmount),
+        depositAmount: Number(proposalData.depositAmount) / 1_000_000,
         depositRefunded: proposalData.depositRefunded,
       };
     });
