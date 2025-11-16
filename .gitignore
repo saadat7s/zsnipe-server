@@ -49,14 +49,14 @@ temp/
 .anchor/
 test-ledger/
 
-# Private keys (NEVER commit these!)
-*.json
-keypair.json
-wallet.json
-id.json
-!package.json
-!package-lock.json
-!tsconfig.json
+# # Private keys (NEVER commit these!)
+# *.json
+# keypair.json
+# wallet.json
+# id.json
+# !package.json
+# !package-lock.json
+# !tsconfig.json
 
 # Database files
 *.db
